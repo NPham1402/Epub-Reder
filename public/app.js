@@ -49,7 +49,7 @@ function loadSettings() {
   let s = {};
   try { s = JSON.parse(localStorage.getItem("devdocs.settings") || "{}"); } catch {}
   return {
-    blurHide: s.blurHide !== false,
+    blurHide: !!s.blurHide,
     camo: !!s.camo,
     serif: !!s.serif,
     fontSize: s.fontSize || 15,
@@ -109,7 +109,31 @@ function langOf(name) {
   const map = { ts: "TypeScript", tsx: "TypeScript JSX", md: "Markdown", py: "Python", go: "Go", rs: "Rust", sql: "SQL", java: "Java", yaml: "YAML", kt: "Kotlin" };
   return map[extOf(name)] || "Markdown";
 }
-function displayName(ch) { return state.revealTitles ? (ch.title || ch.file_name) : ch.file_name; }
+// Parse the real chapter number from a title (Chương/Chapter/Hồi/Quyển N, 第N章…).
+function parseChapterNo(title) {
+  if (!title) return null;
+  let m = String(title).match(/(?:chương|chapter|chap|hồi|quyển|tập)\s*\.?\s*0*(\d{1,5})/i);
+  if (m) return parseInt(m[1], 10);
+  m = String(title).match(/第\s*0*(\d{1,5})\s*[章回]/);
+  if (m) return parseInt(m[1], 10);
+  return null;
+}
+// "0025_mesh_store.java" -> "mesh_store.java"
+function suffixOf(fileName) { return String(fileName).replace(/^\d+_/, ""); }
+
+// Align the fake file number with the book's real chapter numbers so the tree
+// number matches "Chương N". Front matter (no number) stays unnumbered. If no
+// chapter in the book has a parseable number, keep the original sequence.
+function computeLabels(chapters) {
+  const hasNumbers = chapters.some((c) => parseChapterNo(c.title) != null);
+  for (const ch of chapters) {
+    if (!hasNumbers) { ch._label = ch.file_name; continue; }
+    const no = parseChapterNo(ch.title);
+    ch._label = no != null ? String(no).padStart(4, "0") + "_" + suffixOf(ch.file_name) : suffixOf(ch.file_name);
+  }
+}
+function fileLabel(ch) { return ch._label || ch.file_name; }
+function displayName(ch) { return state.revealTitles ? (ch.title || fileLabel(ch)) : fileLabel(ch); }
 function bookById(id) { return state.books.find((b) => b.id === id); }
 function chapterOf(bookId, idx) { const b = bookById(bookId); return b && b._chapters ? b._chapters[idx] : null; }
 
@@ -119,6 +143,7 @@ async function loadBookContent(book) {
   if (!res.ok) return false;
   const data = await res.json();
   book._chapters = data.chapters || [];
+  computeLabels(book._chapters);
   book._progress = data.progress || null;
   if (data.code_name) book.code_name = data.code_name;
   return true;
@@ -149,7 +174,7 @@ function renderTree() {
       for (const ch of book._chapters) {
         const f = el("div", "tree-row tree-file");
         if (state.activeKey === tabKey(book.id, ch.idx)) f.classList.add("active");
-        const ico = el("span", "tree-ico " + codiCls("file", extClass(ch.file_name)));
+        const ico = el("span", "tree-ico " + codiCls("file", extClass(fileLabel(ch))));
         f.appendChild(ico);
         f.appendChild(el("span", "tree-label", displayName(ch)));
         f.addEventListener("click", () => openTab(book.id, ch.idx));
@@ -211,7 +236,7 @@ async function activate(key) {
   state.activeKey = key;
   state.expanded.add(bookId);
   const ch = book._chapters[idx];
-  state.current = { bookId, idx, code_name: book.code_name, fileName: ch.file_name, title: ch.title, book };
+  state.current = { bookId, idx, code_name: book.code_name, fileName: fileLabel(ch), title: ch.title, book };
   renderContent(ch);
   renderTabs();
   renderTree();
@@ -265,7 +290,7 @@ function renderTabs() {
     const ch = chapterOf(t.bookId, t.idx);
     const key = tabKey(t.bookId, t.idx);
     const tab = el("div", "tab" + (key === state.activeKey ? " active" : ""));
-    const ico = el("span", "tab-ico " + codiCls("file", ch ? extClass(ch.file_name) : "ext-default"));
+    const ico = el("span", "tab-ico " + codiCls("file", ch ? extClass(fileLabel(ch)) : "ext-default"));
     tab.appendChild(ico);
     tab.appendChild(el("span", "tab-name", ch ? displayName(ch) : "…"));
     const close = el("span", "tab-close " + codiCls("close"));
@@ -348,7 +373,7 @@ function renderContent(ch) {
   };
 
   // File path header comment (disguise, no title duplication).
-  line("rc", `<span class="tok-comment">// src/${esc(state.current.code_name)}/${esc(ch.file_name)}</span>`, 30, "c");
+  line("rc", `<span class="tok-comment">// src/${esc(state.current.code_name)}/${esc(fileLabel(ch))}</span>`, 30, "c");
   blank();
 
   const blocks = ch.blocks || [];
@@ -374,12 +399,12 @@ function renderContent(ch) {
   line("rc", `<span class="tok-comment">// ─────────────────────────────</span>`, 20, "c");
   if (cur > 0) {
     const prev = chapters[cur - 1];
-    const row = line("rc navline", `<span class="tok-comment">// ◄ import ./${esc(prev.file_name)}</span>`, 24, "c");
+    const row = line("rc navline", `<span class="tok-comment">// ◄ import ./${esc(fileLabel(prev))}</span>`, 24, "c");
     row.addEventListener("click", () => navChapter(-1));
   }
   if (cur < chapters.length - 1) {
     const next = chapters[cur + 1];
-    const row = line("rc navline", `<span class="tok-comment">// ► import ./${esc(next.file_name)}</span>`, 24, "c");
+    const row = line("rc navline", `<span class="tok-comment">// ► import ./${esc(fileLabel(next))}</span>`, 24, "c");
     row.addEventListener("click", () => navChapter(1));
   }
 
@@ -610,11 +635,15 @@ window.addEventListener("blur", () => {
 
 /* ============================ Keyboard ==================================== */
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
+  // Boss key: the "\" key toggles focus mode (and any key dismisses it).
+  if (e.key === "\\") {
     if (anyModalOpen()) return;
     e.preventDefault(); setPanic(!panicVisible); return;
   }
-  if (panicVisible) { if (e.key.length === 1 || e.key === "Enter" || e.key === " ") setPanic(false); return; }
+  if (panicVisible) {
+    if (e.key === "Escape" || e.key.length === 1 || e.key === "Enter" || e.key === " ") setPanic(false);
+    return;
+  }
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.altKey && e.key.toLowerCase() === "t") { e.preventDefault(); toggleReveal(); }
   else if (mod && e.key.toLowerCase() === "b") { e.preventDefault(); toggleSidebar(); }
