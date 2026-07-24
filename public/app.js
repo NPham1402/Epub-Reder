@@ -352,6 +352,21 @@ function renderBreadcrumbs() {
     crumb.appendChild(el("span", null, p.text));
     bc.appendChild(crumb);
   });
+
+  // Prev / next chapter buttons (also bound to the ← / → keys).
+  const total = book && book._chapters ? book._chapters.length : 0;
+  const nav = el("span", "bc-nav");
+  const prev = el("button", "bc-btn codicon codicon-chevron-left");
+  prev.title = "Previous chapter (←)";
+  prev.disabled = state.current.idx <= 0;
+  prev.addEventListener("click", () => navChapter(-1));
+  const next = el("button", "bc-btn codicon codicon-chevron-right");
+  next.title = "Next chapter (→)";
+  next.disabled = total > 0 && state.current.idx >= total - 1;
+  next.addEventListener("click", () => navChapter(1));
+  nav.appendChild(prev);
+  nav.appendChild(next);
+  bc.appendChild(nav);
 }
 
 function updateStatusFile() {

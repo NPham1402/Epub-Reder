@@ -201,6 +201,10 @@ html, body {
 .breadcrumbs .crumb { display: inline-flex; align-items: center; gap: 4px; }
 .breadcrumbs .codicon { font-size: 15px; }
 .breadcrumbs .sep { color: var(--fg-muted); display: inline-flex; }
+.bc-nav { margin-left: auto; display: inline-flex; gap: 2px; }
+.bc-btn { background: none; border: none; color: var(--fg-dim); cursor: pointer; width: 24px; height: 20px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center; font-size: 16px; }
+.bc-btn:hover { background: rgba(255, 255, 255, 0.1); color: var(--fg); }
+.bc-btn:disabled { opacity: 0.3; cursor: default; }
 
 .editor-wrap { flex: 1; display: flex; min-height: 0; position: relative; }
 .editor { flex: 1; overflow-y: auto; overflow-x: auto; position: relative; }
