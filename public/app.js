@@ -666,6 +666,13 @@ window.addEventListener("blur", () => {
 });
 
 /* ============================ Keyboard ==================================== */
+// True when a key is pressed with no modifiers and not while typing in a field.
+function isBare(e) {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false;
+  const t = e.target;
+  if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return false;
+  return true;
+}
 document.addEventListener("keydown", (e) => {
   // Focus mode (boss key): "\" opens it, Esc closes it.
   if (panicVisible) {
@@ -683,8 +690,8 @@ document.addEventListener("keydown", (e) => {
   else if (mod && e.shiftKey && e.key.toLowerCase() === "u") { e.preventDefault(); openUpload(); }
   else if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); changeFont(1); }
   else if (mod && e.key === "-") { e.preventDefault(); changeFont(-1); }
-  else if (e.altKey && e.key === "ArrowRight") { e.preventDefault(); navChapter(1); }
-  else if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); navChapter(-1); }
+  else if (isBare(e) && e.key === "ArrowRight") { e.preventDefault(); navChapter(1); }
+  else if (isBare(e) && e.key === "ArrowLeft") { e.preventDefault(); navChapter(-1); }
   else if (e.altKey && /^[1-9]$/.test(e.key)) { e.preventDefault(); switchToTabIndex(Number(e.key) - 1); }
 });
 window.addEventListener("resize", () => requestAnimationFrame(drawMinimap));

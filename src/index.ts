@@ -6,43 +6,75 @@ import { fakeCodeName, fakeFileName } from "./names";
 import { passcodeMatches, signSession, verifySession } from "./auth";
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
-const MAX_EPUB_BYTES = 60 * 1024 * 1024; // 60 MB guard
-
-// Chapter inserts are batched; keep each batch bounded in both statement count
-// and payload size so a book with hundreds of chapters stays well under the
-// Workers subrequest limit and D1 request-size limits.
-const CHUNK_MAX_STMTS = 40;
-const CHUNK_MAX_BYTES = 800 * 1024;
+const MAX_EPUB_BYTES = 80 * 1024 * 1024; // 80 MB guard
+const META_PER_BATCH = 150; // chapter-metadata inserts per D1 batch
 
 const app = new Hono<{ Bindings: Env }>();
 
+const contentBinKey = (id: string) => `books/${id}/content.bin`;
 const legacyContentKey = (id: string) => `books/${id}/content.json`;
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-// Insert all chapters (with their blocks) into D1, in size-bounded batches.
-async function writeChapters(env: Env, bookId: string, chapters: ParsedChapter[]): Promise<void> {
-  let chunk: D1PreparedStatement[] = [];
-  let bytes = 0;
-  const flush = async () => {
-    if (chunk.length) { await env.DB.batch(chunk); chunk = []; bytes = 0; }
-  };
+interface ChapterMeta {
+  idx: number;
+  title: string | null;
+  file_name: string;
+  char_count: number;
+  offset: number;
+  length: number;
+}
+
+// Serialize every chapter into one contiguous byte blob and record each
+// chapter's byte range. Offsets are UTF-8 byte positions (not char counts).
+function buildContent(chapters: ParsedChapter[]): { blob: Uint8Array; meta: ChapterMeta[] } {
+  const enc = new TextEncoder();
+  const parts: Uint8Array[] = [];
+  const meta: ChapterMeta[] = [];
+  let offset = 0;
   for (let i = 0; i < chapters.length; i++) {
     const ch = chapters[i];
-    const blocksJson = JSON.stringify(ch.blocks);
-    const charCount = ch.blocks.reduce((s, b) => s + b.text.length, 0);
-    chunk.push(
-      env.DB.prepare(
-        `INSERT INTO chapters (book_id, idx, title, file_name, content_key, char_count, blocks)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      ).bind(bookId, i, ch.title, fakeFileName(i), "", charCount, blocksJson),
-    );
-    bytes += blocksJson.length;
-    if (chunk.length >= CHUNK_MAX_STMTS || bytes >= CHUNK_MAX_BYTES) await flush();
+    const bytes = enc.encode(JSON.stringify(ch.blocks));
+    parts.push(bytes);
+    meta.push({
+      idx: i,
+      title: ch.title,
+      file_name: fakeFileName(i),
+      char_count: ch.blocks.reduce((s, b) => s + b.text.length, 0),
+      offset,
+      length: bytes.length,
+    });
+    offset += bytes.length;
   }
-  await flush();
+  const blob = new Uint8Array(offset);
+  let pos = 0;
+  for (const p of parts) { blob.set(p, pos); pos += p.length; }
+  return { blob, meta };
+}
+
+// Insert chapter metadata (small — no blocks) in bounded batches.
+async function writeChapterMeta(env: Env, bookId: string, meta: ChapterMeta[]): Promise<void> {
+  for (let i = 0; i < meta.length; i += META_PER_BATCH) {
+    const slice = meta.slice(i, i + META_PER_BATCH);
+    const stmts = slice.map((m) =>
+      env.DB.prepare(
+        `INSERT INTO chapters (book_id, idx, title, file_name, content_key, char_count, byte_offset, byte_length)
+         VALUES (?, ?, ?, ?, '', ?, ?, ?)`,
+      ).bind(bookId, m.idx, m.title, m.file_name, m.char_count, m.offset, m.length),
+    );
+    await env.DB.batch(stmts);
+  }
+}
+
+// Store one book's content blob + metadata. Used by upload and reindex.
+async function storeBookContent(env: Env, bookId: string, chapters: ParsedChapter[]): Promise<void> {
+  const { blob, meta } = buildContent(chapters);
+  await env.BOOKS.put(contentBinKey(bookId), blob, {
+    httpMetadata: { contentType: "application/octet-stream" },
+  });
+  await writeChapterMeta(env, bookId, meta);
 }
 
 // --- Auth gate for all API routes except login/logout ------------------------
@@ -92,7 +124,7 @@ app.post("/api/books", async (c) => {
     const file = form?.get("file");
     if (!(file instanceof File)) return c.json({ error: "missing file" }, 400);
     const buffer = await file.arrayBuffer();
-    if (buffer.byteLength > MAX_EPUB_BYTES) return c.json({ error: "file too large (max 60 MB)" }, 413);
+    if (buffer.byteLength > MAX_EPUB_BYTES) return c.json({ error: "file too large" }, 413);
     const bytes = new Uint8Array(buffer);
 
     let book;
@@ -109,18 +141,17 @@ app.post("/api/books", async (c) => {
       `INSERT INTO books (id, title, author, language, r2_key, code_name, chapter_count, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(id, book.title, book.author, book.language, rawKey, codeName, book.chapters.length, now).run();
-    await writeChapters(c.env, id, book.chapters);
+    await storeBookContent(c.env, id, book.chapters);
 
     return c.json({ id, title: book.title, code_name: codeName, chapters: book.chapters.length });
   } catch (err) {
-    // Best-effort cleanup of a partially-written book.
     if (id) {
       try {
         await c.env.DB.batch([
           c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
           c.env.DB.prepare(`DELETE FROM books WHERE id = ?`).bind(id),
         ]);
-        if (rawKey) await c.env.BOOKS.delete(rawKey);
+        await c.env.BOOKS.delete([contentBinKey(id), ...(rawKey ? [rawKey] : [])]);
       } catch {}
     }
     console.error("upload error", err);
@@ -134,7 +165,7 @@ app.delete("/api/books/:id", async (c) => {
     .bind(id).first<{ r2_key: string }>();
   if (!book) return c.json({ error: "not found" }, 404);
 
-  await c.env.BOOKS.delete([book.r2_key, legacyContentKey(id)]);
+  await c.env.BOOKS.delete([book.r2_key, contentBinKey(id), legacyContentKey(id)]);
   await c.env.DB.batch([
     c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
     c.env.DB.prepare(`DELETE FROM progress WHERE book_id = ?`).bind(id),
@@ -143,7 +174,7 @@ app.delete("/api/books/:id", async (c) => {
   return c.json({ ok: true });
 });
 
-// --- Chapter index (metadata only, no blocks) --------------------------------
+// --- Chapter index (metadata only) -------------------------------------------
 app.get("/api/books/:id/index", async (c) => {
   const id = c.req.param("id");
   const book = await c.env.DB.prepare(
@@ -161,20 +192,33 @@ app.get("/api/books/:id/index", async (c) => {
   return c.json({ ...book, chapters, progress: progress ?? null });
 });
 
-// --- Single chapter (with blocks) — the lazy-loaded unit ---------------------
+// --- Single chapter — fetched via R2 byte range ------------------------------
 app.get("/api/books/:id/chapters/:idx", async (c) => {
   const id = c.req.param("id");
   const idx = Number(c.req.param("idx"));
   const row = await c.env.DB.prepare(
-    `SELECT idx, title, file_name, blocks FROM chapters WHERE book_id = ? AND idx = ?`,
-  ).bind(id, idx).first<{ idx: number; title: string | null; file_name: string; blocks: string | null }>();
+    `SELECT idx, title, file_name, byte_offset, byte_length, blocks
+     FROM chapters WHERE book_id = ? AND idx = ?`,
+  ).bind(id, idx).first<{
+    idx: number; title: string | null; file_name: string;
+    byte_offset: number | null; byte_length: number | null; blocks: string | null;
+  }>();
   if (!row) return c.json({ error: "not found" }, 404);
+
   let blocks: unknown[] = [];
-  try { blocks = JSON.parse(row.blocks || "[]"); } catch {}
+  if (row.byte_offset != null && row.byte_length != null && row.byte_length > 0) {
+    const obj = await c.env.BOOKS.get(contentBinKey(id), {
+      range: { offset: row.byte_offset, length: row.byte_length },
+    });
+    if (obj) { try { blocks = JSON.parse(await obj.text()); } catch {} }
+  } else if (row.blocks) {
+    // Fallback for a book still stored in the earlier per-row D1 format.
+    try { blocks = JSON.parse(row.blocks); } catch {}
+  }
   return c.json({ idx: row.idx, title: row.title, file_name: row.file_name, blocks });
 });
 
-// --- Re-index an existing book from its stored .epub (migrates old blob books)
+// --- Re-index from the stored .epub into byte-range format --------------------
 app.post("/api/books/:id/reindex", async (c) => {
   const id = c.req.param("id");
   const book = await c.env.DB.prepare(`SELECT id, r2_key FROM books WHERE id = ?`)
@@ -190,10 +234,10 @@ app.post("/api/books/:id/reindex", async (c) => {
   catch (err) { return c.json({ error: "parse failed: " + errMsg(err) }, 422); }
 
   await c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id).run();
-  await writeChapters(c.env, id, parsed.chapters);
+  await storeBookContent(c.env, id, parsed.chapters);
   await c.env.DB.prepare(`UPDATE books SET chapter_count = ? WHERE id = ?`)
     .bind(parsed.chapters.length, id).run();
-  await c.env.BOOKS.delete(legacyContentKey(id)); // drop the old single blob if any
+  await c.env.BOOKS.delete(legacyContentKey(id));
 
   return c.json({ ok: true, chapters: parsed.chapters.length });
 });
