@@ -134,6 +134,7 @@ function computeLabels(chapters) {
 }
 function fileLabel(ch) { return ch._label || ch.file_name; }
 function displayName(ch) { return state.revealTitles ? (ch.title || fileLabel(ch)) : fileLabel(ch); }
+function bookLabel(book) { return state.revealTitles && book && book.title ? book.title : book.code_name; }
 function bookById(id) { return state.books.find((b) => b.id === id); }
 function chapterOf(bookId, idx) { const b = bookById(bookId); return b && b._chapters ? b._chapters[idx] : null; }
 
@@ -161,7 +162,7 @@ function renderTree() {
     const fico = el("span", "tree-ico tree-folder " + codiCls(open ? "folder-open" : "folder"));
     row.appendChild(caret);
     row.appendChild(fico);
-    row.appendChild(el("span", "tree-label", book.code_name));
+    row.appendChild(el("span", "tree-label", bookLabel(book)));
     const del = el("span", "tree-del " + codiCls("trash"));
     del.title = "Remove module";
     del.addEventListener("click", (e) => { e.stopPropagation(); removeBook(book); });
@@ -307,9 +308,10 @@ function renderBreadcrumbs() {
   bc.innerHTML = "";
   if (!state.current) return;
   const ch = chapterOf(state.current.bookId, state.current.idx);
+  const book = bookById(state.current.bookId);
   const parts = [
     { icon: "folder", text: "src" },
-    { icon: "folder", text: state.current.code_name },
+    { icon: "folder", text: book ? bookLabel(book) : state.current.code_name },
     { icon: "file", text: ch ? displayName(ch) : state.current.fileName, ext: extClass(state.current.fileName) },
   ];
   parts.forEach((p, i) => {
