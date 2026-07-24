@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
-import type { Env } from "./types";
+import type { Env, ParsedChapter } from "./types";
 import { parseEpub } from "./epub";
 import { fakeCodeName, fakeFileName } from "./names";
 import { passcodeMatches, signSession, verifySession } from "./auth";
@@ -8,9 +8,42 @@ import { passcodeMatches, signSession, verifySession } from "./auth";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 const MAX_EPUB_BYTES = 60 * 1024 * 1024; // 60 MB guard
 
+// Chapter inserts are batched; keep each batch bounded in both statement count
+// and payload size so a book with hundreds of chapters stays well under the
+// Workers subrequest limit and D1 request-size limits.
+const CHUNK_MAX_STMTS = 40;
+const CHUNK_MAX_BYTES = 800 * 1024;
+
 const app = new Hono<{ Bindings: Env }>();
 
-const contentKeyFor = (id: string) => `books/${id}/content.json`;
+const legacyContentKey = (id: string) => `books/${id}/content.json`;
+
+function errMsg(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+// Insert all chapters (with their blocks) into D1, in size-bounded batches.
+async function writeChapters(env: Env, bookId: string, chapters: ParsedChapter[]): Promise<void> {
+  let chunk: D1PreparedStatement[] = [];
+  let bytes = 0;
+  const flush = async () => {
+    if (chunk.length) { await env.DB.batch(chunk); chunk = []; bytes = 0; }
+  };
+  for (let i = 0; i < chapters.length; i++) {
+    const ch = chapters[i];
+    const blocksJson = JSON.stringify(ch.blocks);
+    const charCount = ch.blocks.reduce((s, b) => s + b.text.length, 0);
+    chunk.push(
+      env.DB.prepare(
+        `INSERT INTO chapters (book_id, idx, title, file_name, content_key, char_count, blocks)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      ).bind(bookId, i, ch.title, fakeFileName(i), "", charCount, blocksJson),
+    );
+    bytes += blocksJson.length;
+    if (chunk.length >= CHUNK_MAX_STMTS || bytes >= CHUNK_MAX_BYTES) await flush();
+  }
+  await flush();
+}
 
 // --- Auth gate for all API routes except login/logout ------------------------
 app.use("/api/*", async (c, next) => {
@@ -31,11 +64,7 @@ app.post("/api/auth", async (c) => {
   }
   const token = await signSession(c.env.SESSION_SECRET, SESSION_TTL_MS);
   setCookie(c, "session", token, {
-    httpOnly: true,
-    secure: true,
-    sameSite: "Lax",
-    path: "/",
-    maxAge: SESSION_TTL_MS / 1000,
+    httpOnly: true, secure: true, sameSite: "Lax", path: "/", maxAge: SESSION_TTL_MS / 1000,
   });
   return c.json({ ok: true });
 });
@@ -55,75 +84,48 @@ app.get("/api/books", async (c) => {
 });
 
 // --- Upload ------------------------------------------------------------------
-// Whole parsed book is stored as ONE R2 object; only book metadata goes to D1.
-// This keeps every upload at a constant 2 R2 writes + 1 D1 write regardless of
-// chapter count (important for the free plan's subrequest limit).
 app.post("/api/books", async (c) => {
+  let id: string | null = null;
+  let rawKey: string | null = null;
   try {
     const form = await c.req.formData().catch(() => null);
     const file = form?.get("file");
     if (!(file instanceof File)) return c.json({ error: "missing file" }, 400);
-
     const buffer = await file.arrayBuffer();
     if (buffer.byteLength > MAX_EPUB_BYTES) return c.json({ error: "file too large (max 60 MB)" }, 413);
     const bytes = new Uint8Array(buffer);
 
     let book;
-    try {
-      book = parseEpub(bytes);
-    } catch (err) {
-      return c.json({ error: "could not parse EPUB: " + errMsg(err) }, 422);
-    }
+    try { book = parseEpub(bytes); }
+    catch (err) { return c.json({ error: "could not parse EPUB: " + errMsg(err) }, 422); }
 
-    const id = crypto.randomUUID();
+    id = crypto.randomUUID();
     const codeName = fakeCodeName(book.title);
     const now = Date.now();
-    const rawKey = `raw/${id}.epub`;
+    rawKey = `raw/${id}.epub`;
 
-    const content = {
-      id,
-      title: book.title,
-      author: book.author,
-      language: book.language,
-      code_name: codeName,
-      chapters: book.chapters.map((ch, i) => ({
-        idx: i,
-        title: ch.title,
-        file_name: fakeFileName(i),
-        char_count: ch.blocks.reduce((s, b) => s + b.text.length, 0),
-        blocks: ch.blocks,
-      })),
-    };
-
-    await Promise.all([
-      c.env.BOOKS.put(rawKey, bytes, { httpMetadata: { contentType: "application/epub+zip" } }),
-      c.env.BOOKS.put(contentKeyFor(id), JSON.stringify(content), {
-        httpMetadata: { contentType: "application/json" },
-      }),
-    ]);
-
+    await c.env.BOOKS.put(rawKey, bytes, { httpMetadata: { contentType: "application/epub+zip" } });
     await c.env.DB.prepare(
       `INSERT INTO books (id, title, author, language, r2_key, code_name, chapter_count, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     ).bind(id, book.title, book.author, book.language, rawKey, codeName, book.chapters.length, now).run();
+    await writeChapters(c.env, id, book.chapters);
 
     return c.json({ id, title: book.title, code_name: codeName, chapters: book.chapters.length });
   } catch (err) {
+    // Best-effort cleanup of a partially-written book.
+    if (id) {
+      try {
+        await c.env.DB.batch([
+          c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
+          c.env.DB.prepare(`DELETE FROM books WHERE id = ?`).bind(id),
+        ]);
+        if (rawKey) await c.env.BOOKS.delete(rawKey);
+      } catch {}
+    }
     console.error("upload error", err);
     return c.json({ error: "server error: " + errMsg(err) }, 500);
   }
-});
-
-// --- Full book content (chapters + blocks) -----------------------------------
-app.get("/api/books/:id/content", async (c) => {
-  const id = c.req.param("id");
-  const obj = await c.env.BOOKS.get(contentKeyFor(id));
-  if (!obj) return c.json({ error: "not found" }, 404);
-  const content = (await obj.json()) as Record<string, unknown>;
-  const progress = await c.env.DB.prepare(
-    `SELECT chapter_idx, scroll_ratio FROM progress WHERE book_id = ?`,
-  ).bind(id).first();
-  return c.json({ ...content, progress: progress ?? null });
 });
 
 app.delete("/api/books/:id", async (c) => {
@@ -132,22 +134,74 @@ app.delete("/api/books/:id", async (c) => {
     .bind(id).first<{ r2_key: string }>();
   if (!book) return c.json({ error: "not found" }, 404);
 
-  await c.env.BOOKS.delete([book.r2_key, contentKeyFor(id)]);
+  await c.env.BOOKS.delete([book.r2_key, legacyContentKey(id)]);
   await c.env.DB.batch([
-    c.env.DB.prepare(`DELETE FROM progress WHERE book_id = ?`).bind(id),
     c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
+    c.env.DB.prepare(`DELETE FROM progress WHERE book_id = ?`).bind(id),
     c.env.DB.prepare(`DELETE FROM books WHERE id = ?`).bind(id),
   ]);
   return c.json({ ok: true });
 });
 
+// --- Chapter index (metadata only, no blocks) --------------------------------
+app.get("/api/books/:id/index", async (c) => {
+  const id = c.req.param("id");
+  const book = await c.env.DB.prepare(
+    `SELECT id, title, author, code_name, chapter_count FROM books WHERE id = ?`,
+  ).bind(id).first();
+  if (!book) return c.json({ error: "not found" }, 404);
+
+  const { results: chapters } = await c.env.DB.prepare(
+    `SELECT idx, title, file_name, char_count FROM chapters WHERE book_id = ? ORDER BY idx`,
+  ).bind(id).all();
+  const progress = await c.env.DB.prepare(
+    `SELECT chapter_idx, scroll_ratio FROM progress WHERE book_id = ?`,
+  ).bind(id).first();
+
+  return c.json({ ...book, chapters, progress: progress ?? null });
+});
+
+// --- Single chapter (with blocks) — the lazy-loaded unit ---------------------
+app.get("/api/books/:id/chapters/:idx", async (c) => {
+  const id = c.req.param("id");
+  const idx = Number(c.req.param("idx"));
+  const row = await c.env.DB.prepare(
+    `SELECT idx, title, file_name, blocks FROM chapters WHERE book_id = ? AND idx = ?`,
+  ).bind(id, idx).first<{ idx: number; title: string | null; file_name: string; blocks: string | null }>();
+  if (!row) return c.json({ error: "not found" }, 404);
+  let blocks: unknown[] = [];
+  try { blocks = JSON.parse(row.blocks || "[]"); } catch {}
+  return c.json({ idx: row.idx, title: row.title, file_name: row.file_name, blocks });
+});
+
+// --- Re-index an existing book from its stored .epub (migrates old blob books)
+app.post("/api/books/:id/reindex", async (c) => {
+  const id = c.req.param("id");
+  const book = await c.env.DB.prepare(`SELECT id, r2_key FROM books WHERE id = ?`)
+    .bind(id).first<{ id: string; r2_key: string }>();
+  if (!book) return c.json({ error: "not found" }, 404);
+
+  const obj = await c.env.BOOKS.get(book.r2_key);
+  if (!obj) return c.json({ error: "raw epub missing" }, 404);
+  const bytes = new Uint8Array(await obj.arrayBuffer());
+
+  let parsed;
+  try { parsed = parseEpub(bytes); }
+  catch (err) { return c.json({ error: "parse failed: " + errMsg(err) }, 422); }
+
+  await c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id).run();
+  await writeChapters(c.env, id, parsed.chapters);
+  await c.env.DB.prepare(`UPDATE books SET chapter_count = ? WHERE id = ?`)
+    .bind(parsed.chapters.length, id).run();
+  await c.env.BOOKS.delete(legacyContentKey(id)); // drop the old single blob if any
+
+  return c.json({ ok: true, chapters: parsed.chapters.length });
+});
+
 // --- Progress ----------------------------------------------------------------
 app.post("/api/books/:id/progress", async (c) => {
   const id = c.req.param("id");
-  const body = (await c.req.json().catch(() => ({}))) as {
-    chapter_idx?: number;
-    scroll_ratio?: number;
-  };
+  const body = (await c.req.json().catch(() => ({}))) as { chapter_idx?: number; scroll_ratio?: number };
   const chapterIdx = Number.isFinite(body.chapter_idx) ? Math.floor(body.chapter_idx as number) : 0;
   const ratio = Number.isFinite(body.scroll_ratio) ? Math.min(1, Math.max(0, body.scroll_ratio as number)) : 0;
 
@@ -163,12 +217,7 @@ app.post("/api/books/:id/progress", async (c) => {
   return c.json({ ok: true });
 });
 
-// --- Static assets fallback (index.html for any non-API route) ---------------
+// --- Static assets fallback --------------------------------------------------
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
-
-function errMsg(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
 
 export default app;

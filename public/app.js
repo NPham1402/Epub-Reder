@@ -138,16 +138,44 @@ function bookLabel(book) { return state.revealTitles && book && book.title ? boo
 function bookById(id) { return state.books.find((b) => b.id === id); }
 function chapterOf(bookId, idx) { const b = bookById(bookId); return b && b._chapters ? b._chapters[idx] : null; }
 
-async function loadBookContent(book) {
+// Load only the chapter index (metadata, a few KB). Chapter text is fetched
+// lazily, one chapter at a time. Auto-migrates old single-blob books.
+async function loadBookIndex(book) {
   if (book._chapters) return true;
-  const res = await api(`/api/books/${book.id}/content`);
+  let res = await api(`/api/books/${book.id}/index`);
   if (!res.ok) return false;
-  const data = await res.json();
+  let data = await res.json();
+  if ((!data.chapters || !data.chapters.length) && data.chapter_count > 0) {
+    // Old-format book (content stored as one blob) — re-index from its .epub.
+    await api(`/api/books/${book.id}/reindex`, { method: "POST" }).catch(() => {});
+    res = await api(`/api/books/${book.id}/index`);
+    if (!res.ok) return false;
+    data = await res.json();
+  }
   book._chapters = data.chapters || [];
   computeLabels(book._chapters);
   book._progress = data.progress || null;
   if (data.code_name) book.code_name = data.code_name;
+  if (data.title) book.title = data.title;
   return true;
+}
+
+// Fetch and cache a single chapter's blocks on demand.
+async function loadChapter(book, idx) {
+  const ch = book._chapters && book._chapters[idx];
+  if (!ch) return null;
+  if (ch._blocks) return ch;
+  const res = await api(`/api/books/${book.id}/chapters/${idx}`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  ch._blocks = data.blocks || [];
+  return ch;
+}
+
+// Prefetch neighbouring chapters so paging feels instant while staying lazy.
+function prefetchAround(book, idx) {
+  loadChapter(book, idx + 1).catch(() => {});
+  if (idx > 0) loadChapter(book, idx - 1).catch(() => {});
 }
 
 /* ============================ Tree ========================================= */
@@ -193,7 +221,7 @@ async function toggleBook(bookId) {
   const book = bookById(bookId);
   if (!book) return;
   if (state.expanded.has(bookId)) { state.expanded.delete(bookId); renderTree(); return; }
-  if (!(await loadBookContent(book))) return;
+  if (!(await loadBookIndex(book))) return;
   state.expanded.add(bookId);
   renderTree();
   // First open of a book with no tab yet: resume from saved progress.
@@ -230,13 +258,14 @@ async function activate(key) {
   const idx = Number(idxStr);
   const book = bookById(bookId);
   if (!book) return;
-  if (!(await loadBookContent(book))) return;
+  if (!(await loadBookIndex(book))) return;
   if (idx < 0 || idx >= book._chapters.length) return;
 
   captureScroll();
   state.activeKey = key;
   state.expanded.add(bookId);
-  const ch = book._chapters[idx];
+  const ch = await loadChapter(book, idx);
+  if (!ch) return;
   state.current = { bookId, idx, code_name: book.code_name, fileName: fileLabel(ch), title: ch.title, book };
   renderContent(ch);
   renderTabs();
@@ -245,6 +274,7 @@ async function activate(key) {
   updateStatusFile();
   restoreScroll(key, book, idx);
   saveSession();
+  prefetchAround(book, idx);
 }
 
 function navChapter(delta) {
@@ -378,7 +408,7 @@ function renderContent(ch) {
   line("rc", `<span class="tok-comment">// src/${esc(state.current.code_name)}/${esc(fileLabel(ch))}</span>`, 30, "c");
   blank();
 
-  const blocks = ch.blocks || [];
+  const blocks = ch._blocks || ch.blocks || [];
   const firstIsHeading = blocks.length && blocks[0].type !== "p";
   if (!firstIsHeading && ch.title) heading(ch.title, 1);
 
