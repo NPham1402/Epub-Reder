@@ -139,6 +139,18 @@ function renderTree() {
   $("#sb-footer").textContent = `${state.books.length} module${state.books.length === 1 ? "" : "s"}`;
 }
 
+// Fetch the whole book once (chapters + blocks) and cache it on the book object.
+async function loadBookContent(book) {
+  if (book._chapters) return true;
+  const res = await api(`/api/books/${book.id}/content`);
+  if (!res.ok) return false;
+  const data = await res.json();
+  book._chapters = data.chapters || [];
+  book._progress = data.progress || null;
+  if (data.code_name) book.code_name = data.code_name;
+  return true;
+}
+
 async function toggleBook(bookId) {
   const book = state.books.find((b) => b.id === bookId);
   if (!book) return;
@@ -147,13 +159,7 @@ async function toggleBook(bookId) {
     renderTree();
     return;
   }
-  if (!book._chapters) {
-    const res = await api(`/api/books/${bookId}/chapters`);
-    if (!res.ok) return;
-    const data = await res.json();
-    book._chapters = data.chapters;
-    book._progress = data.progress;
-  }
+  if (!(await loadBookContent(book))) return;
   state.expanded.add(bookId);
   renderTree();
   // Resume where the reader left off, first time a book is opened.
@@ -177,27 +183,21 @@ async function removeBook(book) {
 async function openChapter(bookId, idx) {
   const book = state.books.find((b) => b.id === bookId);
   if (!book) return;
-  if (!book._chapters) {
-    const res = await api(`/api/books/${bookId}/chapters`);
-    const data = await res.json();
-    book._chapters = data.chapters;
-    book._progress = data.progress;
-  }
+  if (!(await loadBookContent(book))) return;
+  const chapters = book._chapters;
+  if (idx < 0 || idx >= chapters.length) return;
+  const ch = chapters[idx];
   state.expanded.add(bookId);
-
-  const res = await api(`/api/books/${bookId}/chapters/${idx}`);
-  if (!res.ok) return;
-  const data = await res.json();
 
   state.current = {
     bookId,
     code_name: book.code_name,
     idx,
-    fileName: data.file_name,
-    title: data.title,
-    chapters: book._chapters,
+    fileName: ch.file_name,
+    title: ch.title,
+    chapters,
   };
-  renderContent(data);
+  renderContent({ file_name: ch.file_name, title: ch.title, blocks: ch.blocks });
   renderTree();
   renderTabs();
   renderBreadcrumbs();
@@ -383,7 +383,7 @@ async function uploadFile(file) {
     }, 1200);
   } else {
     status.classList.add("err");
-    status.textContent = `! ${data.error || "upload failed"}`;
+    status.textContent = `! ${data.error || "upload failed (HTTP " + res.status + ")"}`;
   }
 }
 

@@ -10,6 +10,8 @@ const MAX_EPUB_BYTES = 60 * 1024 * 1024; // 60 MB guard
 
 const app = new Hono<{ Bindings: Env }>();
 
+const contentKeyFor = (id: string) => `books/${id}/content.json`;
+
 // --- Auth gate for all API routes except login/logout ------------------------
 app.use("/api/*", async (c, next) => {
   const path = new URL(c.req.url).pathname;
@@ -43,7 +45,7 @@ app.post("/api/logout", (c) => {
   return c.json({ ok: true });
 });
 
-// --- Books -------------------------------------------------------------------
+// --- Books list --------------------------------------------------------------
 app.get("/api/books", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT id, title, author, code_name, chapter_count, created_at
@@ -52,112 +54,91 @@ app.get("/api/books", async (c) => {
   return c.json({ books: results });
 });
 
+// --- Upload ------------------------------------------------------------------
+// Whole parsed book is stored as ONE R2 object; only book metadata goes to D1.
+// This keeps every upload at a constant 2 R2 writes + 1 D1 write regardless of
+// chapter count (important for the free plan's subrequest limit).
 app.post("/api/books", async (c) => {
-  const form = await c.req.formData().catch(() => null);
-  const file = form?.get("file");
-  if (!(file instanceof File)) return c.json({ error: "missing file" }, 400);
-  const buffer = await file.arrayBuffer();
-  if (buffer.byteLength > MAX_EPUB_BYTES) return c.json({ error: "file too large" }, 413);
-
-  const bytes = new Uint8Array(buffer);
-  let book;
   try {
-    book = parseEpub(bytes);
-  } catch (err) {
-    return c.json({ error: "could not parse EPUB", detail: String(err) }, 422);
-  }
+    const form = await c.req.formData().catch(() => null);
+    const file = form?.get("file");
+    if (!(file instanceof File)) return c.json({ error: "missing file" }, 400);
 
-  const id = crypto.randomUUID();
-  const codeName = fakeCodeName(book.title);
-  const rawKey = `raw/${id}.epub`;
-  const now = Date.now();
+    const buffer = await file.arrayBuffer();
+    if (buffer.byteLength > MAX_EPUB_BYTES) return c.json({ error: "file too large (max 60 MB)" }, 413);
+    const bytes = new Uint8Array(buffer);
 
-  // Store the raw epub plus one JSON blob per chapter in R2.
-  const contentPuts: Promise<unknown>[] = [
-    c.env.BOOKS.put(rawKey, bytes, {
-      httpMetadata: { contentType: "application/epub+zip" },
-    }),
-  ];
-  const chapterMeta = book.chapters.map((ch, i) => {
-    const contentKey = `books/${id}/ch/${i}.json`;
-    contentPuts.push(
-      c.env.BOOKS.put(contentKey, JSON.stringify({ title: ch.title, blocks: ch.blocks }), {
+    let book;
+    try {
+      book = parseEpub(bytes);
+    } catch (err) {
+      return c.json({ error: "could not parse EPUB: " + errMsg(err) }, 422);
+    }
+
+    const id = crypto.randomUUID();
+    const codeName = fakeCodeName(book.title);
+    const now = Date.now();
+    const rawKey = `raw/${id}.epub`;
+
+    const content = {
+      id,
+      title: book.title,
+      author: book.author,
+      language: book.language,
+      code_name: codeName,
+      chapters: book.chapters.map((ch, i) => ({
+        idx: i,
+        title: ch.title,
+        file_name: fakeFileName(i),
+        char_count: ch.blocks.reduce((s, b) => s + b.text.length, 0),
+        blocks: ch.blocks,
+      })),
+    };
+
+    await Promise.all([
+      c.env.BOOKS.put(rawKey, bytes, { httpMetadata: { contentType: "application/epub+zip" } }),
+      c.env.BOOKS.put(contentKeyFor(id), JSON.stringify(content), {
         httpMetadata: { contentType: "application/json" },
       }),
-    );
-    const charCount = ch.blocks.reduce((sum, b) => sum + b.text.length, 0);
-    return { i, title: ch.title, fileName: fakeFileName(i), contentKey, charCount };
-  });
-  await Promise.all(contentPuts);
+    ]);
 
-  const statements = [
-    c.env.DB.prepare(
+    await c.env.DB.prepare(
       `INSERT INTO books (id, title, author, language, r2_key, code_name, chapter_count, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(id, book.title, book.author, book.language, rawKey, codeName, book.chapters.length, now),
-    ...chapterMeta.map((m) =>
-      c.env.DB.prepare(
-        `INSERT INTO chapters (book_id, idx, title, file_name, content_key, char_count)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      ).bind(id, m.i, m.title, m.fileName, m.contentKey, m.charCount),
-    ),
-  ];
-  await c.env.DB.batch(statements);
+    ).bind(id, book.title, book.author, book.language, rawKey, codeName, book.chapters.length, now).run();
 
-  return c.json({ id, title: book.title, code_name: codeName, chapters: book.chapters.length });
+    return c.json({ id, title: book.title, code_name: codeName, chapters: book.chapters.length });
+  } catch (err) {
+    console.error("upload error", err);
+    return c.json({ error: "server error: " + errMsg(err) }, 500);
+  }
+});
+
+// --- Full book content (chapters + blocks) -----------------------------------
+app.get("/api/books/:id/content", async (c) => {
+  const id = c.req.param("id");
+  const obj = await c.env.BOOKS.get(contentKeyFor(id));
+  if (!obj) return c.json({ error: "not found" }, 404);
+  const content = (await obj.json()) as Record<string, unknown>;
+  const progress = await c.env.DB.prepare(
+    `SELECT chapter_idx, scroll_ratio FROM progress WHERE book_id = ?`,
+  ).bind(id).first();
+  return c.json({ ...content, progress: progress ?? null });
 });
 
 app.delete("/api/books/:id", async (c) => {
   const id = c.req.param("id");
-  const book = await c.env.DB.prepare(`SELECT r2_key FROM books WHERE id = ?`).bind(id).first<{ r2_key: string }>();
+  const book = await c.env.DB.prepare(`SELECT r2_key FROM books WHERE id = ?`)
+    .bind(id).first<{ r2_key: string }>();
   if (!book) return c.json({ error: "not found" }, 404);
 
-  const { results } = await c.env.DB.prepare(
-    `SELECT content_key FROM chapters WHERE book_id = ?`,
-  ).bind(id).all<{ content_key: string }>();
-
-  const keys = [book.r2_key, ...results.map((r) => r.content_key)];
-  await c.env.BOOKS.delete(keys);
+  await c.env.BOOKS.delete([book.r2_key, contentKeyFor(id)]);
   await c.env.DB.batch([
-    c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
     c.env.DB.prepare(`DELETE FROM progress WHERE book_id = ?`).bind(id),
+    c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
     c.env.DB.prepare(`DELETE FROM books WHERE id = ?`).bind(id),
   ]);
   return c.json({ ok: true });
-});
-
-// --- Chapters ----------------------------------------------------------------
-app.get("/api/books/:id/chapters", async (c) => {
-  const id = c.req.param("id");
-  const book = await c.env.DB.prepare(
-    `SELECT id, title, author, code_name, chapter_count FROM books WHERE id = ?`,
-  ).bind(id).first();
-  if (!book) return c.json({ error: "not found" }, 404);
-
-  const { results: chapters } = await c.env.DB.prepare(
-    `SELECT idx, title, file_name, char_count FROM chapters WHERE book_id = ? ORDER BY idx`,
-  ).bind(id).all();
-
-  const progress = await c.env.DB.prepare(
-    `SELECT chapter_idx, scroll_ratio FROM progress WHERE book_id = ?`,
-  ).bind(id).first();
-
-  return c.json({ book, chapters, progress: progress ?? null });
-});
-
-app.get("/api/books/:id/chapters/:idx", async (c) => {
-  const id = c.req.param("id");
-  const idx = Number(c.req.param("idx"));
-  const row = await c.env.DB.prepare(
-    `SELECT content_key, file_name, title FROM chapters WHERE book_id = ? AND idx = ?`,
-  ).bind(id, idx).first<{ content_key: string; file_name: string; title: string | null }>();
-  if (!row) return c.json({ error: "not found" }, 404);
-
-  const obj = await c.env.BOOKS.get(row.content_key);
-  if (!obj) return c.json({ error: "content missing" }, 404);
-  const data = (await obj.json()) as { title: string | null; blocks: unknown[] };
-
-  return c.json({ idx, file_name: row.file_name, title: row.title ?? data.title, blocks: data.blocks });
 });
 
 // --- Progress ----------------------------------------------------------------
@@ -184,5 +165,10 @@ app.post("/api/books/:id/progress", async (c) => {
 
 // --- Static assets fallback (index.html for any non-API route) ---------------
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
+
+function errMsg(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
 
 export default app;
