@@ -25,6 +25,10 @@
 }
 
 * { box-sizing: border-box; }
+/* Ensure the `hidden` attribute always wins over author display rules
+   (.app/.panic/.modal-backdrop set display:flex, which would otherwise
+   override the browser's default [hidden]{display:none}). */
+[hidden] { display: none !important; }
 html, body {
   margin: 0;
   height: 100%;
