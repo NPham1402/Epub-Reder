@@ -93,7 +93,8 @@ html, body {
   padding: 0 8px; font-size: 12px; user-select: none; color: var(--fg);
 }
 .tb-left { display: flex; align-items: center; gap: 14px; }
-.tb-logo { color: var(--tok-type); font-family: var(--font-mono); font-weight: 700; font-size: 13px; }
+.tb-logo { width: 18px; height: 18px; display: inline-flex; }
+.vsclogo svg { width: 100%; height: 100%; display: block; }
 .tb-menu { display: flex; gap: 14px; }
 .tb-menu span { padding: 2px 2px; }
 .tb-menu span:hover { color: var(--fg-strong); cursor: default; }
@@ -206,7 +207,7 @@ html, body {
 .minimap { flex: 0 0 70px; background: var(--editor-bg); cursor: pointer; opacity: 0.85; }
 
 .welcome { padding: 40px 60px; color: var(--fg-dim); max-width: 720px; }
-.welcome-logo { opacity: 0.22; margin-bottom: 16px; font-size: 64px; color: var(--fg); display: inline-flex; }
+.welcome-logo { width: 72px; height: 72px; opacity: 0.9; margin-bottom: 16px; display: inline-flex; }
 .welcome-title { font-size: 28px; color: var(--fg); margin-bottom: 8px; font-weight: 200; letter-spacing: 0.04em; }
 .welcome p { margin: 4px 0 0; }
 .welcome-keys { margin-top: 28px; display: grid; gap: 10px; }
@@ -271,7 +272,7 @@ kbd {
 .modal-close:hover { color: #fff; background: rgba(255, 255, 255, 0.1); }
 
 .auth { padding: 30px 28px; text-align: center; width: 380px; }
-.auth-logo { margin: 0 auto 14px; color: var(--tok-type); font-size: 44px; display: inline-flex; justify-content: center; }
+.auth-logo { width: 48px; height: 48px; margin: 0 auto 14px; display: inline-flex; }
 .auth-title { font-size: 17px; margin-bottom: 6px; color: var(--fg-strong); }
 .auth-sub { color: var(--fg-dim); margin: 0 0 18px; font-size: 13px; }
 .auth input, .modal input[type="password"] {
