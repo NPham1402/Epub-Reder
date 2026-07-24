@@ -635,14 +635,15 @@ window.addEventListener("blur", () => {
 
 /* ============================ Keyboard ==================================== */
 document.addEventListener("keydown", (e) => {
-  // Boss key: the "\" key toggles focus mode (and any key dismisses it).
+  // Focus mode (boss key): "\" opens it, Esc closes it.
+  if (panicVisible) {
+    if (e.key === "Escape") setPanic(false);
+    e.preventDefault();
+    return;
+  }
   if (e.key === "\\") {
     if (anyModalOpen()) return;
-    e.preventDefault(); setPanic(!panicVisible); return;
-  }
-  if (panicVisible) {
-    if (e.key === "Escape" || e.key.length === 1 || e.key === "Enter" || e.key === " ") setPanic(false);
-    return;
+    e.preventDefault(); setPanic(true); return;
   }
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.altKey && e.key.toLowerCase() === "t") { e.preventDefault(); toggleReveal(); }
