@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>workspace — devdocs</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230b1a2a'/%3E%3Cpath d='M6 4L3 8l3 4M10 4l3 4-3 4' stroke='%234ec9b0' stroke-width='1.4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <!-- ===================== IDE SHELL ===================== -->
+    <div id="app" class="app" hidden>
+      <!-- Title bar -->
+      <header class="titlebar">
+        <div class="tb-left">
+          <span class="tb-logo">&lt;/&gt;</span>
+          <nav class="tb-menu">
+            <span>File</span><span>Edit</span><span>Selection</span><span>View</span>
+            <span>Go</span><span>Run</span><span>Terminal</span><span>Help</span>
+          </nav>
+        </div>
+        <div class="tb-center" id="tb-title">workspace — devdocs</div>
+        <div class="tb-right">
+          <button id="btn-upload" class="tb-icon" title="Add module">+</button>
+          <button id="btn-settings" class="tb-icon" title="Settings">⚙</button>
+          <span class="tb-win">—</span><span class="tb-win">▢</span><span class="tb-win">✕</span>
+        </div>
+      </header>
+
+      <div class="body">
+        <!-- Activity bar -->
+        <div class="activitybar">
+          <div class="ab-icon active" title="Explorer">🗂</div>
+          <div class="ab-icon" title="Search">🔍</div>
+          <div class="ab-icon" title="Source Control">⑃</div>
+          <div class="ab-icon" title="Run">▷</div>
+          <div class="ab-icon" title="Extensions">◱</div>
+          <div class="ab-spacer"></div>
+          <div class="ab-icon" id="btn-account" title="Account">◍</div>
+        </div>
+
+        <!-- Explorer sidebar -->
+        <aside class="sidebar" id="sidebar">
+          <div class="sb-header">Explorer</div>
+          <div class="sb-section">
+            <div class="sb-section-title">
+              <span>▾ WORKSPACE</span>
+              <button id="btn-upload2" class="sb-add" title="Import module">+</button>
+            </div>
+            <div id="tree" class="tree"></div>
+          </div>
+          <div class="sb-footer" id="sb-footer">0 modules</div>
+        </aside>
+
+        <!-- Editor group -->
+        <main class="editorgroup">
+          <div class="tabs" id="tabs"></div>
+          <div class="breadcrumbs" id="breadcrumbs"></div>
+          <div class="editor" id="editor">
+            <div class="welcome" id="welcome">
+              <div class="welcome-title">devdocs</div>
+              <p>Select a file in the explorer to open documentation.</p>
+              <p class="welcome-hint">
+                Import module: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>U</kbd> ·
+                Focus mode: <kbd>Esc</kbd> ·
+                Toggle sidebar: <kbd>Ctrl</kbd>+<kbd>B</kbd>
+              </p>
+            </div>
+            <div class="code" id="code" hidden></div>
+          </div>
+        </main>
+      </div>
+
+      <!-- Status bar -->
+      <footer class="statusbar">
+        <div class="st-left">
+          <span class="st-item st-branch">⑃ main*</span>
+          <span class="st-item">✓ 0 &nbsp; ⚠ 0</span>
+          <span class="st-item" id="st-sync">↻</span>
+        </div>
+        <div class="st-right">
+          <span class="st-item" id="st-pos">Ln 1, Col 1</span>
+          <span class="st-item">Spaces: 2</span>
+          <span class="st-item">UTF-8</span>
+          <span class="st-item">LF</span>
+          <span class="st-item" id="st-lang">Markdown</span>
+          <span class="st-item">⚡</span>
+        </div>
+      </footer>
+    </div>
+
+    <!-- ===================== LOGIN ===================== -->
+    <div id="login" class="modal-backdrop" hidden>
+      <form id="login-form" class="modal auth">
+        <div class="auth-title">Authenticate to continue</div>
+        <p class="auth-sub">This workspace requires an access key.</p>
+        <input
+          id="login-pass"
+          type="password"
+          autocomplete="current-password"
+          placeholder="Access key"
+          spellcheck="false"
+        />
+        <div id="login-error" class="auth-error" hidden>Invalid access key.</div>
+        <button type="submit" class="btn-primary">Connect</button>
+      </form>
+    </div>
+
+    <!-- ===================== UPLOAD ===================== -->
+    <div id="upload" class="modal-backdrop" hidden>
+      <div class="modal upload">
+        <div class="modal-head">
+          <span>Import module (.epub)</span>
+          <button class="modal-close" data-close="upload">✕</button>
+        </div>
+        <label id="dropzone" class="dropzone">
+          <input id="file-input" type="file" accept=".epub,application/epub+zip" hidden />
+          <div class="dz-icon">⇩</div>
+          <div>Drop an <b>.epub</b> file here or click to browse</div>
+          <div class="dz-hint">It will be parsed and indexed as a documentation module.</div>
+        </label>
+        <div id="upload-status" class="upload-status" hidden></div>
+      </div>
+    </div>
+
+    <!-- ===================== SETTINGS ===================== -->
+    <div id="settings" class="modal-backdrop" hidden>
+      <div class="modal settings">
+        <div class="modal-head">
+          <span>Preferences</span>
+          <button class="modal-close" data-close="settings">✕</button>
+        </div>
+        <label class="setting-row">
+          <input type="checkbox" id="opt-blur" />
+          <span>Focus mode when window loses focus <small>(auto-hide reading)</small></span>
+        </label>
+        <label class="setting-row">
+          <input type="checkbox" id="opt-camo" />
+          <span>Comment camouflage <small>(render prose as <code>//</code> comments)</small></span>
+        </label>
+        <div class="setting-row">
+          <span>Font size</span>
+          <div class="stepper">
+            <button id="font-dec">A−</button>
+            <span id="font-val">15</span>
+            <button id="font-inc">A+</button>
+          </div>
+        </div>
+        <button id="btn-logout" class="btn-ghost">Sign out</button>
+      </div>
+    </div>
+
+    <!-- ===================== FOCUS / BOSS-KEY OVERLAY ===================== -->
+    <div id="panic" class="panic" hidden>
+      <div class="panic-tabs">
+        <span class="panic-tab active">build.log</span>
+        <span class="panic-tab">deploy.ts</span>
+        <span class="panic-tab">Dockerfile</span>
+      </div>
+      <pre id="panic-code" class="panic-code"></pre>
+      <div class="panic-terminal">
+        <div class="pt-head">PROBLEMS &nbsp; OUTPUT &nbsp; <b>TERMINAL</b> &nbsp; PORTS</div>
+        <pre id="panic-term" class="pt-body"></pre>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

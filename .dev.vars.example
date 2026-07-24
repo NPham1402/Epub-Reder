@@ -1,0 +1,8 @@
+# Copy this file to `.dev.vars` for local `wrangler dev`.
+# In production set these with: wrangler secret put <NAME>
+
+# Passcode required to open the reader.
+ACCESS_PASSCODE="change-me"
+
+# Random string used to sign the session cookie (HMAC). Use a long random value.
+SESSION_SECRET="change-me-to-a-long-random-string"

@@ -1,0 +1,26 @@
+{
+  "name": "epub-reader-it",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc --noEmit",
+    "build:check": "wrangler deploy --dry-run --outdir dist",
+    "cf-typegen": "wrangler types",
+    "db:migrate": "wrangler d1 migrations apply epub_reader_db --remote",
+    "db:migrate:local": "wrangler d1 migrations apply epub_reader_db --local"
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.5.1",
+    "fflate": "^0.8.2",
+    "hono": "^4.6.14",
+    "htmlparser2": "^9.1.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260722.1",
+    "typescript": "^5.7.3",
+    "wrangler": "^4.4.0"
+  }
+}
