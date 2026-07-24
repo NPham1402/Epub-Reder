@@ -25,31 +25,36 @@
         </div>
         <div class="tb-center" id="tb-title">workspace — devdocs</div>
         <div class="tb-right">
-          <button id="btn-upload" class="tb-icon" title="Add module">+</button>
-          <button id="btn-settings" class="tb-icon" title="Settings">⚙</button>
-          <span class="tb-win">—</span><span class="tb-win">▢</span><span class="tb-win">✕</span>
+          <button id="btn-upload" class="tb-icon ico" data-icon="plus" title="Import module (Ctrl+Shift+U)"></button>
+          <button id="btn-settings" class="tb-icon ico" data-icon="settings" title="Settings"></button>
+          <span class="tb-win ico" data-icon="win-min"></span>
+          <span class="tb-win ico" data-icon="win-max"></span>
+          <span class="tb-win ico" data-icon="close"></span>
         </div>
       </header>
 
       <div class="body">
         <!-- Activity bar -->
         <div class="activitybar">
-          <div class="ab-icon active" title="Explorer">🗂</div>
-          <div class="ab-icon" title="Search">🔍</div>
-          <div class="ab-icon" title="Source Control">⑃</div>
-          <div class="ab-icon" title="Run">▷</div>
-          <div class="ab-icon" title="Extensions">◱</div>
+          <div class="ab-icon active ico" data-icon="files" title="Explorer"></div>
+          <div class="ab-icon ico" data-icon="search" title="Search"></div>
+          <div class="ab-icon ico" data-icon="git-branch" title="Source Control"></div>
+          <div class="ab-icon ico" data-icon="run" title="Run and Debug"></div>
+          <div class="ab-icon ico" data-icon="extensions" title="Extensions"></div>
           <div class="ab-spacer"></div>
-          <div class="ab-icon" id="btn-account" title="Account">◍</div>
+          <div class="ab-icon ico" id="btn-account" data-icon="account" title="Account"></div>
         </div>
 
         <!-- Explorer sidebar -->
         <aside class="sidebar" id="sidebar">
-          <div class="sb-header">Explorer</div>
+          <div class="sb-header">
+            <span>Explorer</span>
+            <button id="btn-reveal" class="sb-add ico" data-icon="eye" title="Reveal real titles (Ctrl+Alt+T)"></button>
+          </div>
           <div class="sb-section">
             <div class="sb-section-title">
-              <span>▾ WORKSPACE</span>
-              <button id="btn-upload2" class="sb-add" title="Import module">+</button>
+              <span>Workspace</span>
+              <button id="btn-upload2" class="sb-add ico" data-icon="import" title="Import module"></button>
             </div>
             <div id="tree" class="tree"></div>
           </div>
@@ -60,17 +65,23 @@
         <main class="editorgroup">
           <div class="tabs" id="tabs"></div>
           <div class="breadcrumbs" id="breadcrumbs"></div>
-          <div class="editor" id="editor">
-            <div class="welcome" id="welcome">
-              <div class="welcome-title">devdocs</div>
-              <p>Select a file in the explorer to open documentation.</p>
-              <p class="welcome-hint">
-                Import module: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>U</kbd> ·
-                Focus mode: <kbd>Esc</kbd> ·
-                Toggle sidebar: <kbd>Ctrl</kbd>+<kbd>B</kbd>
-              </p>
+          <div class="editor-wrap">
+            <div class="editor" id="editor">
+              <div class="welcome" id="welcome">
+                <div class="welcome-logo ico" data-icon="logo"></div>
+                <div class="welcome-title">devdocs</div>
+                <p>Open a file from the explorer to read its documentation.</p>
+                <div class="welcome-keys">
+                  <div><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>U</kbd><span>Import module</span></div>
+                  <div><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>T</kbd><span>Reveal real titles</span></div>
+                  <div><kbd>Alt</kbd><kbd>1…9</kbd><span>Switch tab</span></div>
+                  <div><kbd>Alt</kbd><kbd>← →</kbd><span>Prev / next chapter</span></div>
+                  <div><kbd>Esc</kbd><span>Focus mode</span></div>
+                </div>
+              </div>
+              <div class="code" id="code" hidden></div>
             </div>
-            <div class="code" id="code" hidden></div>
+            <canvas class="minimap" id="minimap" width="70" height="100"></canvas>
           </div>
         </main>
       </div>
@@ -78,9 +89,10 @@
       <!-- Status bar -->
       <footer class="statusbar">
         <div class="st-left">
-          <span class="st-item st-branch">⑃ main*</span>
-          <span class="st-item">✓ 0 &nbsp; ⚠ 0</span>
-          <span class="st-item" id="st-sync">↻</span>
+          <span class="st-item st-branch"><span class="ico" data-icon="git-branch"></span> main*</span>
+          <span class="st-item"><span class="ico" data-icon="error"></span> 0 <span class="ico" data-icon="warning"></span> 0</span>
+          <span class="st-item ico" id="st-sync" data-icon="sync"></span>
+          <span class="st-item st-reveal" id="st-reveal" hidden><span class="ico" data-icon="eye"></span> titles</span>
         </div>
         <div class="st-right">
           <span class="st-item" id="st-pos">Ln 1, Col 1</span>
@@ -88,7 +100,7 @@
           <span class="st-item">UTF-8</span>
           <span class="st-item">LF</span>
           <span class="st-item" id="st-lang">Markdown</span>
-          <span class="st-item">⚡</span>
+          <span class="st-item ico" data-icon="bell"></span>
         </div>
       </footer>
     </div>
@@ -96,6 +108,7 @@
     <!-- ===================== LOGIN ===================== -->
     <div id="login" class="modal-backdrop" hidden>
       <form id="login-form" class="modal auth">
+        <div class="auth-logo ico" data-icon="logo"></div>
         <div class="auth-title">Authenticate to continue</div>
         <p class="auth-sub">This workspace requires an access key.</p>
         <input
@@ -115,11 +128,11 @@
       <div class="modal upload">
         <div class="modal-head">
           <span>Import module (.epub)</span>
-          <button class="modal-close" data-close="upload">✕</button>
+          <button class="modal-close ico" data-icon="close" data-close="upload"></button>
         </div>
         <label id="dropzone" class="dropzone">
           <input id="file-input" type="file" accept=".epub,application/epub+zip" hidden />
-          <div class="dz-icon">⇩</div>
+          <div class="dz-icon ico" data-icon="import"></div>
           <div>Drop an <b>.epub</b> file here or click to browse</div>
           <div class="dz-hint">It will be parsed and indexed as a documentation module.</div>
         </label>
@@ -132,7 +145,7 @@
       <div class="modal settings">
         <div class="modal-head">
           <span>Preferences</span>
-          <button class="modal-close" data-close="settings">✕</button>
+          <button class="modal-close ico" data-icon="close" data-close="settings"></button>
         </div>
         <label class="setting-row">
           <input type="checkbox" id="opt-blur" />
@@ -142,12 +155,24 @@
           <input type="checkbox" id="opt-camo" />
           <span>Comment camouflage <small>(render prose as <code>//</code> comments)</small></span>
         </label>
+        <label class="setting-row">
+          <input type="checkbox" id="opt-serif" />
+          <span>Comfortable reading font <small>(easier on the eyes)</small></span>
+        </label>
         <div class="setting-row">
           <span>Font size</span>
           <div class="stepper">
             <button id="font-dec">A−</button>
             <span id="font-val">15</span>
             <button id="font-inc">A+</button>
+          </div>
+        </div>
+        <div class="setting-row">
+          <span>Reading width</span>
+          <div class="stepper">
+            <button id="width-dec">−</button>
+            <span id="width-val">82</span>
+            <button id="width-inc">+</button>
           </div>
         </div>
         <button id="btn-logout" class="btn-ghost">Sign out</button>
@@ -157,9 +182,9 @@
     <!-- ===================== FOCUS / BOSS-KEY OVERLAY ===================== -->
     <div id="panic" class="panic" hidden>
       <div class="panic-tabs">
-        <span class="panic-tab active">build.log</span>
-        <span class="panic-tab">deploy.ts</span>
-        <span class="panic-tab">Dockerfile</span>
+        <span class="panic-tab active"><span class="ico" data-icon="terminal"></span> build.log</span>
+        <span class="panic-tab"><span class="ico" data-icon="file"></span> deploy.ts</span>
+        <span class="panic-tab"><span class="ico" data-icon="file"></span> Dockerfile</span>
       </div>
       <pre id="panic-code" class="panic-code"></pre>
       <div class="panic-terminal">

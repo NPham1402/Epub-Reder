@@ -1,65 +1,102 @@
 "use strict";
 
-// ============================ State =========================================
+/* ============================ Icons (Codicon-style) ======================== */
+const S = (inner, extra = "") =>
+  `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${inner}</svg>`;
+const ICONS = {
+  logo: S('<path d="M6 3.5 2 8l4 4.5M10 3.5 14 8l-4 4.5"/>', 'stroke-width="1.5"'),
+  files: S('<path d="M6.4 4.2H3.7a.8.8 0 0 0-.8.8v7.5a.8.8 0 0 0 .8.8h4.8a.8.8 0 0 0 .8-.8V6.5z"/><path d="M6.4 4.2v2.3h2.7"/><path d="M9 4.2V3a.8.8 0 0 1 .8-.8h2.5L14 4.1v6.7a.8.8 0 0 1-.8.8h-1.1"/>'),
+  search: S('<circle cx="6.7" cy="6.7" r="4.3"/><path d="M13.5 13.5 10 10"/>'),
+  "git-branch": S('<circle cx="4.5" cy="3.8" r="1.6"/><circle cx="4.5" cy="12.2" r="1.6"/><circle cx="11.5" cy="4.6" r="1.6"/><path d="M4.5 5.4v5.2M4.5 8h3.6a3 3 0 0 0 3-3v-.4"/>'),
+  run: S('<path d="M5 3.4v9.2l7.5-4.6z"/>', 'fill="currentColor" stroke="none"'),
+  extensions: S('<rect x="2.4" y="9.3" width="4.3" height="4.3" rx=".6"/><rect x="9.3" y="9.3" width="4.3" height="4.3" rx=".6"/><rect x="2.4" y="2.4" width="4.3" height="4.3" rx=".6"/><rect x="9.5" y="1.9" width="4.3" height="4.3" rx=".6"/>'),
+  account: S('<circle cx="8" cy="5.6" r="2.6"/><path d="M3 13.4a5.1 5.1 0 0 1 10 0"/>'),
+  settings: S('<circle cx="8" cy="8" r="2.1"/><path d="M8 1.7v2M8 12.3v2M1.7 8h2M12.3 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M12.4 3.6 11 5M5 11l-1.4 1.4"/>'),
+  plus: S('<path d="M8 3.2v9.6M3.2 8h9.6"/>'),
+  import: S('<path d="M8 2.6v6.4M5.4 6.4 8 9l2.6-2.6"/><path d="M3 10.4v1.6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1.6"/>'),
+  eye: S('<path d="M1.5 8S4 3.9 8 3.9 14.5 8 14.5 8 12 12.1 8 12.1 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="1.9"/>'),
+  close: S('<path d="M4 4l8 8M12 4l-8 8"/>'),
+  "win-min": S('<path d="M3 8h10"/>'),
+  "win-max": S('<rect x="3.5" y="3.5" width="9" height="9"/>'),
+  error: S('<circle cx="8" cy="8" r="5.6"/><path d="M6 6l4 4M10 6l-4 4"/>'),
+  warning: S('<path d="M8 2.8 14.2 13H1.8z"/><path d="M8 6.6v3.1M8 11.5h.01"/>'),
+  sync: S('<path d="M13.2 7A5.2 5.2 0 0 0 4 4.9M3.5 2.7v2.6h2.6"/><path d="M2.8 9A5.2 5.2 0 0 0 12 11.1M12.5 13.3v-2.6H9.9"/>'),
+  bell: S('<path d="M8 2.2a3.3 3.3 0 0 0-3.3 3.3c0 3.9-1.5 5-1.5 5h9.6s-1.5-1.1-1.5-5A3.3 3.3 0 0 0 8 2.2zM6.8 12.9a1.3 1.3 0 0 0 2.4 0"/>'),
+  terminal: S('<path d="M2.9 4 6.4 8l-3.5 4M7.9 12h5.2"/>'),
+  file: S('<path d="M9 1.9H4.6a.9.9 0 0 0-.9.9v10.4a.9.9 0 0 0 .9.9h6.8a.9.9 0 0 0 .9-.9V4.9z"/><path d="M9 1.9v3h3"/><path d="M6.9 8.2 5.4 9.7l1.5 1.5M9.1 8.2l1.5 1.5-1.5 1.5"/>'),
+  folder: S('<path d="M1.6 3.9h3.9l1.2 1.5h7.7v8H1.6z"/>'),
+  "folder-open": S('<path d="M1.6 3.9h3.9l1.2 1.5h6.6v1.3M2.9 13.4h9.9l1.6-6H4.5z"/>'),
+  "chevron-right": S('<path d="M6 3.5 10.5 8 6 12.5"/>', 'stroke-width="1.3"'),
+  "chevron-down": S('<path d="M3.5 6 8 10.5 12.5 6"/>', 'stroke-width="1.3"'),
+  trash: S('<path d="M2.8 4.3h10.4M6 4.3l.3-1.4h3.4l.3 1.4M5 4.3l.6 9.1h4.8l.6-9.1"/>'),
+};
+function injectIcons(root = document) {
+  root.querySelectorAll("[data-icon]").forEach((e) => {
+    const n = e.dataset.icon;
+    if (ICONS[n]) e.innerHTML = ICONS[n];
+  });
+}
+
+/* ============================ State ======================================== */
 const state = {
   books: [],
-  expanded: new Set(), // book ids whose chapter list is open
-  current: null, // { bookId, code_name, idx, fileName, chapters:[...] }
+  expanded: new Set(),
+  tabs: [], // [{bookId, idx}]
+  activeKey: null, // "bookId:idx"
+  current: null,
+  scroll: {}, // key -> scrollTop
+  revealTitles: false,
   saveTimer: null,
-  restoreRatio: 0,
+  mmLines: [],
+  mmRAF: 0,
   settings: loadSettings(),
 };
 
-const $ = (sel) => document.querySelector(sel);
-const el = (tag, cls, text) => {
-  const n = document.createElement(tag);
-  if (cls) n.className = cls;
-  if (text != null) n.textContent = text;
+const $ = (s) => document.querySelector(s);
+const el = (t, c, txt) => {
+  const n = document.createElement(t);
+  if (c) n.className = c;
+  if (txt != null) n.textContent = txt;
   return n;
 };
 const esc = (s) =>
-  String(s).replace(/[&<>"']/g, (m) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]),
-  );
+  String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+const tabKey = (b, i) => `${b}:${i}`;
 
 function loadSettings() {
   let s = {};
-  try {
-    s = JSON.parse(localStorage.getItem("devdocs.settings") || "{}");
-  } catch {}
+  try { s = JSON.parse(localStorage.getItem("devdocs.settings") || "{}"); } catch {}
   return {
-    blurHide: s.blurHide !== false, // default ON
+    blurHide: s.blurHide !== false,
     camo: !!s.camo,
+    serif: !!s.serif,
     fontSize: s.fontSize || 15,
+    readWidth: s.readWidth || 82,
   };
 }
-function saveSettings() {
-  localStorage.setItem("devdocs.settings", JSON.stringify(state.settings));
+function saveSettings() { localStorage.setItem("devdocs.settings", JSON.stringify(state.settings)); }
+function saveSession() {
+  localStorage.setItem("devdocs.session", JSON.stringify({ tabs: state.tabs, activeKey: state.activeKey }));
 }
 
-// ============================ API ===========================================
+/* ============================ API ========================================== */
 async function api(path, opts = {}) {
-  const res = await fetch(path, {
+  return fetch(path, {
     credentials: "same-origin",
-    headers: opts.body && !(opts.body instanceof FormData)
-      ? { "content-type": "application/json" }
-      : undefined,
+    headers: opts.body && !(opts.body instanceof FormData) ? { "content-type": "application/json" } : undefined,
     ...opts,
   });
-  return res;
 }
 
-// ============================ Auth ==========================================
+/* ============================ Boot / auth ================================== */
 async function boot() {
   const res = await api("/api/books");
-  if (res.status === 401) {
-    showLogin();
-    return;
-  }
+  if (res.status === 401) { showLogin(); return; }
   const data = await res.json();
   state.books = data.books || [];
   $("#app").hidden = false;
   applySettingsToDom();
+  await restoreSession();
   renderTree();
 }
 
@@ -67,11 +104,9 @@ function showLogin() {
   $("#login").hidden = false;
   setTimeout(() => $("#login-pass").focus(), 50);
 }
-
 $("#login-form").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const passcode = $("#login-pass").value;
-  const res = await api("/api/auth", { method: "POST", body: JSON.stringify({ passcode }) });
+  const res = await api("/api/auth", { method: "POST", body: JSON.stringify({ passcode: $("#login-pass").value }) });
   if (res.ok) {
     $("#login").hidden = true;
     $("#login-pass").value = "";
@@ -82,64 +117,20 @@ $("#login-form").addEventListener("submit", async (e) => {
   }
 });
 
-// ============================ Tree ==========================================
-function extOf(name) {
-  const m = name.match(/\.([a-z0-9]+)$/i);
-  return m ? m[1].toLowerCase() : "";
-}
+/* ============================ Helpers ====================================== */
+function extOf(name) { const m = name.match(/\.([a-z0-9]+)$/i); return m ? m[1].toLowerCase() : ""; }
 function extClass(name) {
   const e = extOf(name);
-  return ["ts", "tsx", "md", "py", "go", "rs", "sql"].includes(e) ? `tree-ext-${e === "tsx" ? "ts" : e}` : "tree-ext-default";
+  return ["ts", "tsx", "md", "py", "go", "rs", "sql", "java", "kt", "yaml"].includes(e) ? "ext-" + e : "ext-default";
 }
 function langOf(name) {
   const map = { ts: "TypeScript", tsx: "TypeScript JSX", md: "Markdown", py: "Python", go: "Go", rs: "Rust", sql: "SQL", java: "Java", yaml: "YAML", kt: "Kotlin" };
   return map[extOf(name)] || "Markdown";
 }
+function displayName(ch) { return state.revealTitles ? (ch.title || ch.file_name) : ch.file_name; }
+function bookById(id) { return state.books.find((b) => b.id === id); }
+function chapterOf(bookId, idx) { const b = bookById(bookId); return b && b._chapters ? b._chapters[idx] : null; }
 
-function renderTree() {
-  const tree = $("#tree");
-  tree.innerHTML = "";
-  for (const book of state.books) {
-    const bookNode = el("div", "tree-book");
-    const row = el("div", "tree-row");
-    row.dataset.bookId = book.id;
-    const open = state.expanded.has(book.id);
-    row.appendChild(el("span", "tree-caret", open ? "▾" : "▸"));
-    row.appendChild(el("span", "tree-ico", "📁"));
-    row.appendChild(el("span", "tree-label", book.code_name));
-    const del = el("span", "tree-del", "🗑");
-    del.title = "Remove module";
-    del.addEventListener("click", (e) => {
-      e.stopPropagation();
-      removeBook(book);
-    });
-    row.appendChild(del);
-    row.addEventListener("click", () => toggleBook(book.id));
-    bookNode.appendChild(row);
-
-    const children = el("div", "tree-children" + (open ? "" : " collapsed"));
-    children.dataset.for = book.id;
-    if (open && book._chapters) {
-      for (const ch of book._chapters) {
-        const f = el("div", "tree-row tree-file");
-        f.dataset.bookId = book.id;
-        f.dataset.idx = ch.idx;
-        if (state.current && state.current.bookId === book.id && state.current.idx === ch.idx) {
-          f.classList.add("active");
-        }
-        f.appendChild(el("span", "tree-ico " + extClass(ch.file_name), "❮❯"));
-        f.appendChild(el("span", "tree-label", ch.file_name));
-        f.addEventListener("click", () => openChapter(book.id, ch.idx));
-        children.appendChild(f);
-      }
-    }
-    bookNode.appendChild(children);
-    tree.appendChild(bookNode);
-  }
-  $("#sb-footer").textContent = `${state.books.length} module${state.books.length === 1 ? "" : "s"}`;
-}
-
-// Fetch the whole book once (chapters + blocks) and cache it on the book object.
 async function loadBookContent(book) {
   if (book._chapters) return true;
   const res = await api(`/api/books/${book.id}/content`);
@@ -151,21 +142,59 @@ async function loadBookContent(book) {
   return true;
 }
 
-async function toggleBook(bookId) {
-  const book = state.books.find((b) => b.id === bookId);
-  if (!book) return;
-  if (state.expanded.has(bookId)) {
-    state.expanded.delete(bookId);
-    renderTree();
-    return;
+/* ============================ Tree ========================================= */
+function renderTree() {
+  const tree = $("#tree");
+  tree.innerHTML = "";
+  for (const book of state.books) {
+    const node = el("div", "tree-book");
+    const row = el("div", "tree-row");
+    const open = state.expanded.has(book.id);
+    const caret = el("span", "tree-caret ico");
+    caret.innerHTML = ICONS[open ? "chevron-down" : "chevron-right"];
+    const fico = el("span", "tree-ico tree-folder ico");
+    fico.innerHTML = ICONS[open ? "folder-open" : "folder"];
+    row.appendChild(caret);
+    row.appendChild(fico);
+    row.appendChild(el("span", "tree-label", book.code_name));
+    const del = el("span", "tree-del ico");
+    del.innerHTML = ICONS.trash;
+    del.title = "Remove module";
+    del.addEventListener("click", (e) => { e.stopPropagation(); removeBook(book); });
+    row.appendChild(del);
+    row.addEventListener("click", () => toggleBook(book.id));
+    node.appendChild(row);
+
+    const children = el("div", "tree-children" + (open ? "" : " collapsed"));
+    if (open && book._chapters) {
+      for (const ch of book._chapters) {
+        const f = el("div", "tree-row tree-file");
+        if (state.activeKey === tabKey(book.id, ch.idx)) f.classList.add("active");
+        const ico = el("span", "tree-ico ico " + extClass(ch.file_name));
+        ico.innerHTML = ICONS.file;
+        f.appendChild(ico);
+        f.appendChild(el("span", "tree-label", displayName(ch)));
+        f.addEventListener("click", () => openTab(book.id, ch.idx));
+        children.appendChild(f);
+      }
+    }
+    node.appendChild(children);
+    tree.appendChild(node);
   }
+  const n = state.books.length;
+  $("#sb-footer").textContent = `${n} module${n === 1 ? "" : "s"}`;
+}
+
+async function toggleBook(bookId) {
+  const book = bookById(bookId);
+  if (!book) return;
+  if (state.expanded.has(bookId)) { state.expanded.delete(bookId); renderTree(); return; }
   if (!(await loadBookContent(book))) return;
   state.expanded.add(bookId);
   renderTree();
-  // Resume where the reader left off, first time a book is opened.
-  if (book._progress && (!state.current || state.current.bookId !== bookId)) {
-    state.restoreRatio = book._progress.scroll_ratio || 0;
-    openChapter(bookId, book._progress.chapter_idx || 0);
+  // First open of a book with no tab yet: resume from saved progress.
+  if (book._progress && !state.tabs.some((t) => t.bookId === bookId)) {
+    openTab(bookId, book._progress.chapter_idx || 0);
   }
 }
 
@@ -175,45 +204,155 @@ async function removeBook(book) {
   if (!res.ok) return;
   state.books = state.books.filter((b) => b.id !== book.id);
   state.expanded.delete(book.id);
-  if (state.current && state.current.bookId === book.id) closeEditor();
+  state.tabs = state.tabs.filter((t) => t.bookId !== book.id);
+  if (state.current && state.current.bookId === book.id) {
+    state.activeKey = null;
+    if (state.tabs.length) activate(tabKey(state.tabs[0].bookId, state.tabs[0].idx));
+    else showWelcome();
+  }
+  renderTabs();
   renderTree();
+  saveSession();
 }
 
-// ============================ Chapter rendering =============================
-async function openChapter(bookId, idx) {
-  const book = state.books.find((b) => b.id === bookId);
+/* ============================ Tabs ========================================= */
+function openTab(bookId, idx) {
+  if (!state.tabs.some((t) => t.bookId === bookId && t.idx === idx)) state.tabs.push({ bookId, idx });
+  activate(tabKey(bookId, idx));
+}
+
+async function activate(key) {
+  const [bookId, idxStr] = key.split(":");
+  const idx = Number(idxStr);
+  const book = bookById(bookId);
   if (!book) return;
   if (!(await loadBookContent(book))) return;
-  const chapters = book._chapters;
-  if (idx < 0 || idx >= chapters.length) return;
-  const ch = chapters[idx];
-  state.expanded.add(bookId);
+  if (idx < 0 || idx >= book._chapters.length) return;
 
-  state.current = {
-    bookId,
-    code_name: book.code_name,
-    idx,
-    fileName: ch.file_name,
-    title: ch.title,
-    chapters,
-  };
-  renderContent({ file_name: ch.file_name, title: ch.title, blocks: ch.blocks });
-  renderTree();
+  captureScroll();
+  state.activeKey = key;
+  state.expanded.add(bookId);
+  const ch = book._chapters[idx];
+  state.current = { bookId, idx, code_name: book.code_name, fileName: ch.file_name, title: ch.title, book };
+  renderContent(ch);
   renderTabs();
+  renderTree();
   renderBreadcrumbs();
   updateStatusFile();
+  restoreScroll(key, book, idx);
+  saveSession();
 }
 
-function renderContent(data) {
+function navChapter(delta) {
+  if (!state.activeKey) return;
+  const [b, iStr] = state.activeKey.split(":");
+  const idx = Number(iStr) + delta;
+  const book = bookById(b);
+  if (!book || !book._chapters || idx < 0 || idx >= book._chapters.length) return;
+  const ti = state.tabs.findIndex((t) => tabKey(t.bookId, t.idx) === state.activeKey);
+  if (ti >= 0) state.tabs[ti] = { bookId: b, idx };
+  activate(tabKey(b, idx));
+}
+
+function switchToTabIndex(i) {
+  if (i < 0 || i >= state.tabs.length) return;
+  activate(tabKey(state.tabs[i].bookId, state.tabs[i].idx));
+}
+
+function closeTab(key) {
+  const i = state.tabs.findIndex((t) => tabKey(t.bookId, t.idx) === key);
+  if (i < 0) return;
+  state.tabs.splice(i, 1);
+  delete state.scroll[key];
+  if (state.activeKey === key) {
+    if (state.tabs.length) {
+      const n = Math.min(i, state.tabs.length - 1);
+      activate(tabKey(state.tabs[n].bookId, state.tabs[n].idx));
+    } else {
+      state.activeKey = null;
+      showWelcome();
+      renderTabs();
+      renderTree();
+      saveSession();
+    }
+  } else {
+    renderTabs();
+  }
+}
+
+function renderTabs() {
+  const tabs = $("#tabs");
+  tabs.innerHTML = "";
+  for (const t of state.tabs) {
+    const ch = chapterOf(t.bookId, t.idx);
+    const key = tabKey(t.bookId, t.idx);
+    const tab = el("div", "tab" + (key === state.activeKey ? " active" : ""));
+    const ico = el("span", "tab-ico ico " + (ch ? extClass(ch.file_name) : "ext-default"));
+    ico.innerHTML = ICONS.file;
+    tab.appendChild(ico);
+    tab.appendChild(el("span", "tab-name", ch ? displayName(ch) : "…"));
+    const close = el("span", "tab-close ico");
+    close.innerHTML = ICONS.close;
+    close.addEventListener("click", (e) => { e.stopPropagation(); closeTab(key); });
+    tab.appendChild(close);
+    tab.addEventListener("click", () => activate(key));
+    tab.addEventListener("mousedown", (e) => { if (e.button === 1) { e.preventDefault(); closeTab(key); } });
+    tabs.appendChild(tab);
+  }
+}
+
+function renderBreadcrumbs() {
+  const bc = $("#breadcrumbs");
+  bc.innerHTML = "";
+  if (!state.current) return;
+  const ch = chapterOf(state.current.bookId, state.current.idx);
+  const parts = [
+    { icon: "folder", text: "src" },
+    { icon: "folder", text: state.current.code_name },
+    { icon: "file", text: ch ? displayName(ch) : state.current.fileName, ext: extClass(state.current.fileName) },
+  ];
+  parts.forEach((p, i) => {
+    if (i > 0) { const sep = el("span", "sep ico"); sep.innerHTML = ICONS["chevron-right"]; bc.appendChild(sep); }
+    const crumb = el("span", "crumb");
+    const ico = el("span", "ico " + (p.ext || ""));
+    ico.innerHTML = ICONS[p.icon];
+    crumb.appendChild(ico);
+    crumb.appendChild(el("span", null, p.text));
+    bc.appendChild(crumb);
+  });
+}
+
+function updateStatusFile() {
+  $("#st-lang").textContent = state.current ? langOf(state.current.fileName) : "Markdown";
+  if (state.current) {
+    const ch = chapterOf(state.current.bookId, state.current.idx);
+    document.title = `${ch ? displayName(ch) : state.current.fileName} — devdocs`;
+  }
+}
+
+function showWelcome() {
+  state.current = null;
+  $("#code").hidden = true;
+  $("#welcome").hidden = false;
+  $("#breadcrumbs").innerHTML = "";
+  state.mmLines = [];
+  drawMinimap();
+  document.title = "workspace — devdocs";
+}
+
+/* ============================ Content rendering ============================ */
+function renderContent(ch) {
   const code = $("#code");
   const camo = state.settings.camo;
   $("#welcome").hidden = true;
   code.hidden = false;
+  code.classList.toggle("serif", state.settings.serif);
   code.innerHTML = "";
 
+  const mm = [];
   let n = 0;
   const frag = document.createDocumentFragment();
-  const line = (cls, html) => {
+  const line = (cls, html, ink, kind) => {
     n++;
     const row = el("div", "row " + cls);
     const ln = el("span", "ln", String(n));
@@ -222,146 +361,192 @@ function renderContent(data) {
     row.appendChild(ln);
     row.appendChild(lc);
     frag.appendChild(row);
+    mm.push({ ink: ink || 0, kind: kind || "p" });
     return row;
   };
-  const blank = () => line("rb", "&nbsp;");
+  const blank = () => line("rb", "&nbsp;", 0, "blank");
+  const heading = (text, level) => {
+    const hashes = "#".repeat(level);
+    blank();
+    line("rh", `<span class="tok-comment">${hashes} </span><span class="tok-heading">${esc(text)}</span>`, text.length + 2, "h");
+    blank();
+  };
 
-  // Header banner styled as a documentation heading.
-  const heading = data.title || data.file_name;
-  line("rh", `<span class="tok-cmt"># </span><span class="tok-h">${esc(heading)}</span>`);
-  blank();
-  line("rc", `<span class="tok-cmt">&gt; module: ${esc(state.current.code_name)} · generated documentation</span>`);
+  // File path header comment (disguise, no title duplication).
+  line("rc", `<span class="tok-comment">// src/${esc(state.current.code_name)}/${esc(ch.file_name)}</span>`, 30, "c");
   blank();
 
-  for (const b of data.blocks) {
+  const blocks = ch.blocks || [];
+  const firstIsHeading = blocks.length && blocks[0].type !== "p";
+  if (!firstIsHeading && ch.title) heading(ch.title, 1);
+
+  for (const b of blocks) {
     if (b.type === "h1" || b.type === "h2" || b.type === "h3") {
-      const hashes = b.type === "h1" ? "#" : b.type === "h2" ? "##" : "###";
-      blank();
-      line("rh", `<span class="tok-cmt">${hashes} </span><span class="tok-h">${esc(b.text)}</span>`);
-      blank();
+      heading(b.text, b.type === "h1" ? 1 : b.type === "h2" ? 2 : 3);
     } else if (camo) {
-      line("rc", `<span class="tok-cmt">// </span>${esc(b.text)}`);
+      line("rc", `<span class="tok-comment">// </span>${esc(b.text)}`, b.text.length, "c");
       blank();
     } else {
-      line("rp", esc(b.text));
+      line("rp", esc(b.text), b.text.length, "p");
       blank();
     }
   }
 
-  // Navigation footer (prev / next) disguised as trailing comments.
-  const chapters = state.current.chapters;
-  const cur = state.current.idx;
+  // Prev / next chapter, disguised as import comments.
+  const chapters = state.current.book._chapters;
+  const cur = ch.idx;
   blank();
-  line("rc", `<span class="tok-cmt">// ─────────────────────────────</span>`);
+  line("rc", `<span class="tok-comment">// ─────────────────────────────</span>`, 20, "c");
   if (cur > 0) {
-    const prev = chapters.find((c) => c.idx === cur - 1);
-    const row = line("rc navline", `<span class="tok-cmt">// ◄ import ./${esc(prev ? prev.file_name : "prev")}</span>`);
-    row.addEventListener("click", () => openChapter(state.current.bookId, cur - 1));
+    const prev = chapters[cur - 1];
+    const row = line("rc navline", `<span class="tok-comment">// ◄ import ./${esc(prev.file_name)}</span>`, 24, "c");
+    row.addEventListener("click", () => navChapter(-1));
   }
-  const next = chapters.find((c) => c.idx === cur + 1);
-  if (next) {
-    const row = line("rc navline", `<span class="tok-cmt">// ► import ./${esc(next.file_name)}</span>`);
-    row.addEventListener("click", () => openChapter(state.current.bookId, cur + 1));
+  if (cur < chapters.length - 1) {
+    const next = chapters[cur + 1];
+    const row = line("rc navline", `<span class="tok-comment">// ► import ./${esc(next.file_name)}</span>`, 24, "c");
+    row.addEventListener("click", () => navChapter(1));
   }
 
   code.appendChild(frag);
+  state.mmLines = mm;
+  requestAnimationFrame(drawMinimap);
+}
 
-  // Restore scroll position (once), else scroll to top.
+/* ============================ Minimap ====================================== */
+function drawMinimap() {
+  const canvas = $("#minimap");
+  const wrap = canvas.parentElement;
+  if (!wrap) return;
+  const dpr = window.devicePixelRatio || 1;
+  const W = 70;
+  const H = wrap.clientHeight || 300;
+  if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = W + "px";
+    canvas.style.height = H + "px";
+  }
+  const ctx = canvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const lines = state.mmLines;
+  const nLines = lines.length;
+  if (!nLines) return;
+
+  const rowH = Math.max(1, Math.min(3, (H - 8) / nLines));
+  const colors = { h: "#4ec9b0", c: "#5a7a4a", p: "#6b6b6b", blank: null };
+  for (let i = 0; i < nLines; i++) {
+    const L = lines[i];
+    if (L.kind === "blank" || L.ink === 0) continue;
+    const y = 4 + i * rowH;
+    const w = Math.max(2, Math.min(1, L.ink / 70) * (W - 10));
+    ctx.fillStyle = colors[L.kind] || "#6b6b6b";
+    ctx.globalAlpha = L.kind === "h" ? 0.9 : 0.55;
+    ctx.fillRect(6, y, w, Math.max(1, rowH - 0.6));
+  }
+  ctx.globalAlpha = 1;
+
+  // Viewport slider.
+  const editor = $("#editor");
+  const total = editor.scrollHeight || 1;
+  const contentH = Math.min(H, 4 + nLines * rowH);
+  const boxY = (editor.scrollTop / total) * contentH;
+  const boxH = Math.max(18, (editor.clientHeight / total) * contentH);
+  ctx.fillStyle = "rgba(255,255,255,0.08)";
+  ctx.fillRect(0, boxY, W, boxH);
+  ctx.strokeStyle = "rgba(255,255,255,0.12)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(0.5, boxY + 0.5, W - 1, boxH - 1);
+}
+$("#minimap").addEventListener("click", (e) => {
+  const editor = $("#editor");
+  const rect = e.currentTarget.getBoundingClientRect();
+  const ratio = (e.clientY - rect.top) / rect.height;
+  editor.scrollTop = ratio * editor.scrollHeight - editor.clientHeight / 2;
+});
+
+/* ============================ Scroll / progress =========================== */
+function captureScroll() { if (state.activeKey) state.scroll[state.activeKey] = $("#editor").scrollTop; }
+function restoreScroll(key, book, idx) {
   const editor = $("#editor");
   requestAnimationFrame(() => {
-    if (state.restoreRatio > 0) {
-      editor.scrollTop = state.restoreRatio * (editor.scrollHeight - editor.clientHeight);
-      state.restoreRatio = 0;
-    } else {
-      editor.scrollTop = 0;
+    let top = 0;
+    if (key in state.scroll) top = state.scroll[key];
+    else if (book._progress && book._progress.chapter_idx === idx) {
+      top = (book._progress.scroll_ratio || 0) * (editor.scrollHeight - editor.clientHeight);
     }
+    editor.scrollTop = top;
+    drawMinimap();
+    updatePos();
   });
 }
-
-function closeEditor() {
-  state.current = null;
-  $("#code").hidden = true;
-  $("#welcome").hidden = false;
-  $("#tabs").innerHTML = "";
-  $("#breadcrumbs").innerHTML = "";
+function updatePos() {
+  const editor = $("#editor");
+  const denom = editor.scrollHeight - editor.clientHeight;
+  const ratio = denom > 0 ? editor.scrollTop / denom : 0;
+  const ln = Math.max(1, Math.round(ratio * state.mmLines.length));
+  $("#st-pos").textContent = `Ln ${ln}, Col 1  ${Math.round(ratio * 100)}%`;
 }
 
-// ============================ Tabs & breadcrumbs ============================
-function renderTabs() {
-  const tabs = $("#tabs");
-  tabs.innerHTML = "";
-  if (!state.current) return;
-  const tab = el("div", "tab active");
-  tab.appendChild(el("span", "tab-dot"));
-  tab.appendChild(el("span", "tab-name", state.current.fileName));
-  const close = el("span", "tab-close", "✕");
-  close.addEventListener("click", closeEditor);
-  tab.appendChild(close);
-  tabs.appendChild(tab);
-  document.title = `${state.current.fileName} — devdocs`;
-}
-
-function renderBreadcrumbs() {
-  const bc = $("#breadcrumbs");
-  bc.innerHTML = "";
-  if (!state.current) return;
-  ["src", state.current.code_name, state.current.fileName].forEach((c) => {
-    bc.appendChild(el("span", "crumb", c));
-  });
-}
-
-function updateStatusFile() {
-  $("#st-lang").textContent = state.current ? langOf(state.current.fileName) : "Markdown";
-}
-
-// ============================ Progress ======================================
 $("#editor").addEventListener("scroll", () => {
+  if (!state.mmRAF) state.mmRAF = requestAnimationFrame(() => { state.mmRAF = 0; drawMinimap(); });
+  updatePos();
   if (!state.current) return;
   const editor = $("#editor");
   const denom = editor.scrollHeight - editor.clientHeight;
   const ratio = denom > 0 ? editor.scrollTop / denom : 0;
-  const pct = Math.round(ratio * 100);
-  $("#st-pos").textContent = `Ln ${Math.max(1, Math.round(ratio * 400))}, Col 1  (${pct}%)`;
   clearTimeout(state.saveTimer);
-  state.saveTimer = setTimeout(() => saveProgress(ratio), 800);
+  state.saveTimer = setTimeout(() => saveProgress(ratio), 700);
 });
 
 async function saveProgress(ratio) {
   if (!state.current) return;
+  const book = state.current.book;
+  if (book) book._progress = { chapter_idx: state.current.idx, scroll_ratio: ratio };
   api(`/api/books/${state.current.bookId}/progress`, {
     method: "POST",
     body: JSON.stringify({ chapter_idx: state.current.idx, scroll_ratio: ratio }),
   }).catch(() => {});
 }
-
-// ============================ Upload ========================================
-function openUpload() {
-  $("#upload").hidden = false;
+function beaconProgress() {
+  if (!state.current) return;
+  const editor = $("#editor");
+  const denom = editor.scrollHeight - editor.clientHeight;
+  const ratio = denom > 0 ? editor.scrollTop / denom : 0;
+  const body = JSON.stringify({ chapter_idx: state.current.idx, scroll_ratio: ratio });
+  try { navigator.sendBeacon(`/api/books/${state.current.bookId}/progress`, new Blob([body], { type: "application/json" })); } catch {}
 }
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") { captureScroll(); beaconProgress(); saveSession(); }
+});
+window.addEventListener("pagehide", () => { beaconProgress(); saveSession(); });
+
+/* ============================ Session restore ============================= */
+async function restoreSession() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem("devdocs.session") || "{}"); } catch {}
+  const tabs = (saved.tabs || []).filter((t) => bookById(t.bookId));
+  state.tabs = tabs;
+  for (const t of tabs) state.expanded.add(t.bookId);
+  renderTabs();
+  const active = saved.activeKey && tabs.some((t) => tabKey(t.bookId, t.idx) === saved.activeKey)
+    ? saved.activeKey
+    : tabs.length ? tabKey(tabs[0].bookId, tabs[0].idx) : null;
+  if (active) await activate(active);
+}
+
+/* ============================ Upload ====================================== */
+function openUpload() { $("#upload").hidden = false; }
 $("#btn-upload").addEventListener("click", openUpload);
 $("#btn-upload2").addEventListener("click", openUpload);
-
 const dropzone = $("#dropzone");
 const fileInput = $("#file-input");
-fileInput.addEventListener("change", () => {
-  if (fileInput.files[0]) uploadFile(fileInput.files[0]);
-});
-["dragover", "dragenter"].forEach((ev) =>
-  dropzone.addEventListener(ev, (e) => {
-    e.preventDefault();
-    dropzone.classList.add("drag");
-  }),
-);
-["dragleave", "drop"].forEach((ev) =>
-  dropzone.addEventListener(ev, (e) => {
-    e.preventDefault();
-    dropzone.classList.remove("drag");
-  }),
-);
-dropzone.addEventListener("drop", (e) => {
-  const f = e.dataTransfer.files[0];
-  if (f) uploadFile(f);
-});
+fileInput.addEventListener("change", () => { if (fileInput.files[0]) uploadFile(fileInput.files[0]); });
+["dragover", "dragenter"].forEach((ev) => dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add("drag"); }));
+["dragleave", "drop"].forEach((ev) => dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove("drag"); }));
+dropzone.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f) uploadFile(f); });
 
 async function uploadFile(file) {
   const status = $("#upload-status");
@@ -377,124 +562,97 @@ async function uploadFile(file) {
     const list = await api("/api/books").then((r) => r.json());
     state.books = list.books;
     renderTree();
-    setTimeout(() => {
-      $("#upload").hidden = true;
-      status.hidden = true;
-    }, 1200);
+    setTimeout(() => { $("#upload").hidden = true; status.hidden = true; }, 1200);
   } else {
     status.classList.add("err");
     status.textContent = `! ${data.error || "upload failed (HTTP " + res.status + ")"}`;
   }
 }
 
-// ============================ Settings ======================================
+/* ============================ Settings ==================================== */
 function openSettings() {
   $("#opt-blur").checked = state.settings.blurHide;
   $("#opt-camo").checked = state.settings.camo;
+  $("#opt-serif").checked = state.settings.serif;
   $("#font-val").textContent = state.settings.fontSize;
+  $("#width-val").textContent = state.settings.readWidth;
   $("#settings").hidden = false;
 }
 $("#btn-settings").addEventListener("click", openSettings);
 $("#btn-account").addEventListener("click", openSettings);
-$("#opt-blur").addEventListener("change", (e) => {
-  state.settings.blurHide = e.target.checked;
-  saveSettings();
-});
-$("#opt-camo").addEventListener("change", (e) => {
-  state.settings.camo = e.target.checked;
-  saveSettings();
-  if (state.current) openChapter(state.current.bookId, state.current.idx);
-});
+$("#opt-blur").addEventListener("change", (e) => { state.settings.blurHide = e.target.checked; saveSettings(); });
+$("#opt-camo").addEventListener("change", (e) => { state.settings.camo = e.target.checked; saveSettings(); rerender(); });
+$("#opt-serif").addEventListener("change", (e) => { state.settings.serif = e.target.checked; saveSettings(); rerender(); });
 $("#font-inc").addEventListener("click", () => changeFont(1));
 $("#font-dec").addEventListener("click", () => changeFont(-1));
+$("#width-inc").addEventListener("click", () => changeWidth(4));
+$("#width-dec").addEventListener("click", () => changeWidth(-4));
 function changeFont(d) {
   state.settings.fontSize = Math.min(28, Math.max(10, state.settings.fontSize + d));
   $("#font-val").textContent = state.settings.fontSize;
-  saveSettings();
-  applySettingsToDom();
+  saveSettings(); applySettingsToDom(); requestAnimationFrame(drawMinimap);
+}
+function changeWidth(d) {
+  state.settings.readWidth = Math.min(140, Math.max(50, state.settings.readWidth + d));
+  $("#width-val").textContent = state.settings.readWidth;
+  saveSettings(); applySettingsToDom();
 }
 function applySettingsToDom() {
-  document.documentElement.style.setProperty("--code-size", state.settings.fontSize + "px");
+  const r = document.documentElement.style;
+  r.setProperty("--code-size", state.settings.fontSize + "px");
+  r.setProperty("--read-width", state.settings.readWidth + "ch");
 }
-$("#btn-logout").addEventListener("click", async () => {
-  await api("/api/logout", { method: "POST" });
-  location.reload();
-});
+function rerender() { const ch = state.current && chapterOf(state.current.bookId, state.current.idx); if (ch) renderContent(ch); }
+$("#btn-logout").addEventListener("click", async () => { await api("/api/logout", { method: "POST" }); location.reload(); });
 
-// Close buttons / backdrop clicks.
-document.querySelectorAll("[data-close]").forEach((b) =>
-  b.addEventListener("click", () => ($("#" + b.dataset.close).hidden = true)),
-);
+document.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => ($("#" + b.dataset.close).hidden = true)));
 document.querySelectorAll(".modal-backdrop").forEach((bd) =>
-  bd.addEventListener("click", (e) => {
-    if (e.target === bd && bd.id !== "login") bd.hidden = true;
-  }),
+  bd.addEventListener("click", (e) => { if (e.target === bd && bd.id !== "login") bd.hidden = true; }),
 );
 
-// ============================ Sidebar toggle ================================
-function toggleSidebar() {
-  $("#sidebar").classList.toggle("hidden");
+/* ============================ Reveal titles =============================== */
+function toggleReveal() {
+  state.revealTitles = !state.revealTitles;
+  $("#st-reveal").hidden = !state.revealTitles;
+  $("#btn-reveal").classList.toggle("on", state.revealTitles);
+  renderTree(); renderTabs(); renderBreadcrumbs(); updateStatusFile();
 }
+$("#btn-reveal").addEventListener("click", toggleReveal);
 
-// ============================ Panic / focus overlay =========================
+/* ============================ Sidebar / panic ============================= */
+function toggleSidebar() { $("#sidebar").classList.toggle("hidden"); requestAnimationFrame(drawMinimap); }
+
 let panicVisible = false;
-function setPanic(on) {
-  panicVisible = on;
-  $("#panic").hidden = !on;
-  if (on) renderPanic();
-}
-function anyModalOpen() {
-  return ["upload", "settings", "login"].some((id) => !$("#" + id).hidden);
-}
-
+function setPanic(on) { panicVisible = on; $("#panic").hidden = !on; if (on) renderPanic(); }
+function anyModalOpen() { return ["upload", "settings", "login"].some((id) => !$("#" + id).hidden); }
 function renderPanic() {
-  const code = $("#panic-code");
-  code.innerHTML = PANIC_CODE;
-  const term = $("#panic-term");
-  term.innerHTML = PANIC_TERM + '<span class="term-cursor">&nbsp;</span>';
+  $("#panic-code").innerHTML = PANIC_CODE;
+  $("#panic-term").innerHTML = PANIC_TERM + '<span class="term-cursor">&nbsp;</span>';
 }
-
 window.addEventListener("blur", () => {
-  if (state.settings.blurHide && $("#app").hidden === false && !anyModalOpen()) {
-    setPanic(true);
-  }
+  if (state.settings.blurHide && $("#app").hidden === false && !anyModalOpen()) setPanic(true);
 });
 
-// ============================ Keyboard ======================================
+/* ============================ Keyboard ==================================== */
 document.addEventListener("keydown", (e) => {
-  // Boss key / focus mode.
   if (e.key === "Escape") {
     if (anyModalOpen()) return;
-    e.preventDefault();
-    setPanic(!panicVisible);
-    return;
+    e.preventDefault(); setPanic(!panicVisible); return;
   }
-  if (panicVisible) {
-    // Any key returns from panic (like dismissing a screensaver).
-    if (e.key.length === 1 || e.key === "Enter" || e.key === " ") setPanic(false);
-    return;
-  }
+  if (panicVisible) { if (e.key.length === 1 || e.key === "Enter" || e.key === " ") setPanic(false); return; }
   const mod = e.ctrlKey || e.metaKey;
-  if (mod && e.key.toLowerCase() === "b") {
-    e.preventDefault();
-    toggleSidebar();
-  } else if (mod && e.shiftKey && e.key.toLowerCase() === "u") {
-    e.preventDefault();
-    openUpload();
-  } else if (mod && (e.key === "=" || e.key === "+")) {
-    e.preventDefault();
-    changeFont(1);
-  } else if (mod && e.key === "-") {
-    e.preventDefault();
-    changeFont(-1);
-  } else if (e.altKey && e.key === "ArrowRight") {
-    if (state.current) openChapter(state.current.bookId, state.current.idx + 1);
-  } else if (e.altKey && e.key === "ArrowLeft") {
-    if (state.current && state.current.idx > 0) openChapter(state.current.bookId, state.current.idx - 1);
-  }
+  if (mod && e.altKey && e.key.toLowerCase() === "t") { e.preventDefault(); toggleReveal(); }
+  else if (mod && e.key.toLowerCase() === "b") { e.preventDefault(); toggleSidebar(); }
+  else if (mod && e.shiftKey && e.key.toLowerCase() === "u") { e.preventDefault(); openUpload(); }
+  else if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); changeFont(1); }
+  else if (mod && e.key === "-") { e.preventDefault(); changeFont(-1); }
+  else if (e.altKey && e.key === "ArrowRight") { e.preventDefault(); navChapter(1); }
+  else if (e.altKey && e.key === "ArrowLeft") { e.preventDefault(); navChapter(-1); }
+  else if (e.altKey && /^[1-9]$/.test(e.key)) { e.preventDefault(); switchToTabIndex(Number(e.key) - 1); }
 });
+window.addEventListener("resize", () => requestAnimationFrame(drawMinimap));
 
-// ============================ Panic content ================================
+/* ============================ Panic content =============================== */
 const PANIC_CODE = [
   '<span class="pl-cmt">// src/edge/session-gateway.ts</span>',
   '<span class="pl-key">import</span> { Router } <span class="pl-key">from</span> <span class="pl-str">"itty-router"</span>;',
@@ -503,21 +661,21 @@ const PANIC_CODE = [
   '<span class="pl-key">export interface</span> Env {',
   "  SESSIONS: KVNamespace;",
   "  DB: D1Database;",
-  "  JWT_SECRET: <span class=\"pl-key\">string</span>;",
+  '  JWT_SECRET: <span class="pl-key">string</span>;',
   "}",
   "",
-  '<span class="pl-key">const</span> router = Router();',
+  '<span class="pl-key">const</span> router = <span class="pl-fn">Router</span>();',
   "",
   'router.<span class="pl-fn">post</span>(<span class="pl-str">"/v1/auth/refresh"</span>, <span class="pl-key">async</span> (req, env: Env) => {',
-  '  <span class="pl-key">const</span> token = req.headers.<span class="pl-fn">get</span>(<span class="pl-str">"authorization"</span>)?.<span class="pl-fn">slice</span>(7);',
-  '  <span class="pl-key">if</span> (!token) <span class="pl-key">return</span> <span class="pl-fn">json</span>({ error: <span class="pl-str">"missing token"</span> }, 401);',
+  '  <span class="pl-key">const</span> token = req.headers.<span class="pl-fn">get</span>(<span class="pl-str">"authorization"</span>)?.<span class="pl-fn">slice</span>(<span class="pl-num">7</span>);',
+  '  <span class="pl-key">if</span> (!token) <span class="pl-key">return</span> <span class="pl-fn">json</span>({ error: <span class="pl-str">"missing token"</span> }, <span class="pl-num">401</span>);',
   "",
   '  <span class="pl-key">const</span> claims = <span class="pl-key">await</span> <span class="pl-fn">verifyJWT</span>(token, env.JWT_SECRET);',
-  '  <span class="pl-key">if</span> (!claims) <span class="pl-key">return</span> <span class="pl-fn">json</span>({ error: <span class="pl-str">"invalid token"</span> }, 401);',
+  '  <span class="pl-key">if</span> (!claims) <span class="pl-key">return</span> <span class="pl-fn">json</span>({ error: <span class="pl-str">"invalid token"</span> }, <span class="pl-num">401</span>);',
   "",
-  '  <span class="pl-key">const</span> session = <span class="pl-key">await</span> <span class="pl-fn">signSession</span>(claims.sub, env.JWT_SECRET, 3600);',
-  '  <span class="pl-key">await</span> env.SESSIONS.<span class="pl-fn">put</span>(claims.sub, session, { expirationTtl: 3600 });',
-  '  <span class="pl-key">return</span> <span class="pl-fn">json</span>({ session, expiresIn: 3600 });',
+  '  <span class="pl-key">const</span> session = <span class="pl-key">await</span> <span class="pl-fn">signSession</span>(claims.sub, env.JWT_SECRET, <span class="pl-num">3600</span>);',
+  '  <span class="pl-key">await</span> env.SESSIONS.<span class="pl-fn">put</span>(claims.sub, session, { expirationTtl: <span class="pl-num">3600</span> });',
+  '  <span class="pl-key">return</span> <span class="pl-fn">json</span>({ session, expiresIn: <span class="pl-num">3600</span> });',
   "});",
   "",
   'router.<span class="pl-fn">get</span>(<span class="pl-str">"/v1/health"</span>, () => <span class="pl-fn">json</span>({ ok: <span class="pl-key">true</span> }));',
@@ -532,11 +690,7 @@ const PANIC_TERM = [
   "> wrangler deploy",
   "",
   " ⛅️ wrangler 4.4.0",
-  "-------------------",
   "Total Upload: 48.21 KiB / gzip: 12.07 KiB",
-  "Your Worker has access to the following bindings:",
-  "  - D1 Databases: DB",
-  "  - KV Namespaces: SESSIONS",
   "Uploaded edge-session-gateway (3.11 sec)",
   "Deployed edge-session-gateway triggers (0.42 sec)",
   "  https://edge-session-gateway.workers.dev",
@@ -545,11 +699,11 @@ const PANIC_TERM = [
   '<span class="pl-cmt">$ npm test -- --watch</span>',
   " PASS  test/session.spec.ts (2.4s)",
   " PASS  test/jwt.spec.ts (1.1s)",
-  "Test Suites: 2 passed, 2 total",
   "Tests:       17 passed, 17 total",
   "",
   '<span class="pl-cmt">$ </span>',
 ].join("\n");
 
-// ============================ Go ============================================
+/* ============================ Go ========================================== */
+injectIcons();
 boot();
