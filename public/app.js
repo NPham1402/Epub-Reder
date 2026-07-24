@@ -1,39 +1,21 @@
 "use strict";
 
-/* ============================ Icons (Codicon-style) ======================== */
-const S = (inner, extra = "") =>
-  `<svg viewBox="0 0 16 16" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round" ${extra}>${inner}</svg>`;
-const ICONS = {
-  logo: S('<path d="M6 3.5 2 8l4 4.5M10 3.5 14 8l-4 4.5"/>', 'stroke-width="1.5"'),
-  files: S('<path d="M6.4 4.2H3.7a.8.8 0 0 0-.8.8v7.5a.8.8 0 0 0 .8.8h4.8a.8.8 0 0 0 .8-.8V6.5z"/><path d="M6.4 4.2v2.3h2.7"/><path d="M9 4.2V3a.8.8 0 0 1 .8-.8h2.5L14 4.1v6.7a.8.8 0 0 1-.8.8h-1.1"/>'),
-  search: S('<circle cx="6.7" cy="6.7" r="4.3"/><path d="M13.5 13.5 10 10"/>'),
-  "git-branch": S('<circle cx="4.5" cy="3.8" r="1.6"/><circle cx="4.5" cy="12.2" r="1.6"/><circle cx="11.5" cy="4.6" r="1.6"/><path d="M4.5 5.4v5.2M4.5 8h3.6a3 3 0 0 0 3-3v-.4"/>'),
-  run: S('<path d="M5 3.4v9.2l7.5-4.6z"/>', 'fill="currentColor" stroke="none"'),
-  extensions: S('<rect x="2.4" y="9.3" width="4.3" height="4.3" rx=".6"/><rect x="9.3" y="9.3" width="4.3" height="4.3" rx=".6"/><rect x="2.4" y="2.4" width="4.3" height="4.3" rx=".6"/><rect x="9.5" y="1.9" width="4.3" height="4.3" rx=".6"/>'),
-  account: S('<circle cx="8" cy="5.6" r="2.6"/><path d="M3 13.4a5.1 5.1 0 0 1 10 0"/>'),
-  settings: S('<circle cx="8" cy="8" r="2.1"/><path d="M8 1.7v2M8 12.3v2M1.7 8h2M12.3 8h2M3.6 3.6l1.4 1.4M11 11l1.4 1.4M12.4 3.6 11 5M5 11l-1.4 1.4"/>'),
-  plus: S('<path d="M8 3.2v9.6M3.2 8h9.6"/>'),
-  import: S('<path d="M8 2.6v6.4M5.4 6.4 8 9l2.6-2.6"/><path d="M3 10.4v1.6a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1v-1.6"/>'),
-  eye: S('<path d="M1.5 8S4 3.9 8 3.9 14.5 8 14.5 8 12 12.1 8 12.1 1.5 8 1.5 8z"/><circle cx="8" cy="8" r="1.9"/>'),
-  close: S('<path d="M4 4l8 8M12 4l-8 8"/>'),
-  "win-min": S('<path d="M3 8h10"/>'),
-  "win-max": S('<rect x="3.5" y="3.5" width="9" height="9"/>'),
-  error: S('<circle cx="8" cy="8" r="5.6"/><path d="M6 6l4 4M10 6l-4 4"/>'),
-  warning: S('<path d="M8 2.8 14.2 13H1.8z"/><path d="M8 6.6v3.1M8 11.5h.01"/>'),
-  sync: S('<path d="M13.2 7A5.2 5.2 0 0 0 4 4.9M3.5 2.7v2.6h2.6"/><path d="M2.8 9A5.2 5.2 0 0 0 12 11.1M12.5 13.3v-2.6H9.9"/>'),
-  bell: S('<path d="M8 2.2a3.3 3.3 0 0 0-3.3 3.3c0 3.9-1.5 5-1.5 5h9.6s-1.5-1.1-1.5-5A3.3 3.3 0 0 0 8 2.2zM6.8 12.9a1.3 1.3 0 0 0 2.4 0"/>'),
-  terminal: S('<path d="M2.9 4 6.4 8l-3.5 4M7.9 12h5.2"/>'),
-  file: S('<path d="M9 1.9H4.6a.9.9 0 0 0-.9.9v10.4a.9.9 0 0 0 .9.9h6.8a.9.9 0 0 0 .9-.9V4.9z"/><path d="M9 1.9v3h3"/><path d="M6.9 8.2 5.4 9.7l1.5 1.5M9.1 8.2l1.5 1.5-1.5 1.5"/>'),
-  folder: S('<path d="M1.6 3.9h3.9l1.2 1.5h7.7v8H1.6z"/>'),
-  "folder-open": S('<path d="M1.6 3.9h3.9l1.2 1.5h6.6v1.3M2.9 13.4h9.9l1.6-6H4.5z"/>'),
-  "chevron-right": S('<path d="M6 3.5 10.5 8 6 12.5"/>', 'stroke-width="1.3"'),
-  "chevron-down": S('<path d="M3.5 6 8 10.5 12.5 6"/>', 'stroke-width="1.3"'),
-  trash: S('<path d="M2.8 4.3h10.4M6 4.3l.3-1.4h3.4l.3 1.4M5 4.3l.6 9.1h4.8l.6-9.1"/>'),
+/* ============================ Icons (VS Code codicons) ===================== */
+const CODI = {
+  logo: "code", files: "files", search: "search", "git-branch": "source-control",
+  run: "debug-alt", extensions: "extensions", account: "account", settings: "settings-gear",
+  plus: "add", import: "cloud-download", eye: "eye", close: "close",
+  "win-min": "chrome-minimize", "win-max": "chrome-maximize", "win-close": "chrome-close",
+  error: "error", warning: "warning", sync: "sync", bell: "bell", terminal: "terminal",
+  file: "file-code", folder: "folder", "folder-open": "folder-opened",
+  "chevron-right": "chevron-right", "chevron-down": "chevron-down", trash: "trash",
 };
+const codiName = (name) => CODI[name] || name;
+const codiCls = (name, extra) => "codicon codicon-" + codiName(name) + (extra ? " " + extra : "");
 function injectIcons(root = document) {
   root.querySelectorAll("[data-icon]").forEach((e) => {
-    const n = e.dataset.icon;
-    if (ICONS[n]) e.innerHTML = ICONS[n];
+    const c = CODI[e.dataset.icon];
+    if (c) e.classList.add("codicon", "codicon-" + c);
   });
 }
 
@@ -150,15 +132,12 @@ function renderTree() {
     const node = el("div", "tree-book");
     const row = el("div", "tree-row");
     const open = state.expanded.has(book.id);
-    const caret = el("span", "tree-caret ico");
-    caret.innerHTML = ICONS[open ? "chevron-down" : "chevron-right"];
-    const fico = el("span", "tree-ico tree-folder ico");
-    fico.innerHTML = ICONS[open ? "folder-open" : "folder"];
+    const caret = el("span", "tree-caret " + codiCls(open ? "chevron-down" : "chevron-right"));
+    const fico = el("span", "tree-ico tree-folder " + codiCls(open ? "folder-open" : "folder"));
     row.appendChild(caret);
     row.appendChild(fico);
     row.appendChild(el("span", "tree-label", book.code_name));
-    const del = el("span", "tree-del ico");
-    del.innerHTML = ICONS.trash;
+    const del = el("span", "tree-del " + codiCls("trash"));
     del.title = "Remove module";
     del.addEventListener("click", (e) => { e.stopPropagation(); removeBook(book); });
     row.appendChild(del);
@@ -170,8 +149,7 @@ function renderTree() {
       for (const ch of book._chapters) {
         const f = el("div", "tree-row tree-file");
         if (state.activeKey === tabKey(book.id, ch.idx)) f.classList.add("active");
-        const ico = el("span", "tree-ico ico " + extClass(ch.file_name));
-        ico.innerHTML = ICONS.file;
+        const ico = el("span", "tree-ico " + codiCls("file", extClass(ch.file_name)));
         f.appendChild(ico);
         f.appendChild(el("span", "tree-label", displayName(ch)));
         f.addEventListener("click", () => openTab(book.id, ch.idx));
@@ -287,12 +265,10 @@ function renderTabs() {
     const ch = chapterOf(t.bookId, t.idx);
     const key = tabKey(t.bookId, t.idx);
     const tab = el("div", "tab" + (key === state.activeKey ? " active" : ""));
-    const ico = el("span", "tab-ico ico " + (ch ? extClass(ch.file_name) : "ext-default"));
-    ico.innerHTML = ICONS.file;
+    const ico = el("span", "tab-ico " + codiCls("file", ch ? extClass(ch.file_name) : "ext-default"));
     tab.appendChild(ico);
     tab.appendChild(el("span", "tab-name", ch ? displayName(ch) : "…"));
-    const close = el("span", "tab-close ico");
-    close.innerHTML = ICONS.close;
+    const close = el("span", "tab-close " + codiCls("close"));
     close.addEventListener("click", (e) => { e.stopPropagation(); closeTab(key); });
     tab.appendChild(close);
     tab.addEventListener("click", () => activate(key));
@@ -312,10 +288,9 @@ function renderBreadcrumbs() {
     { icon: "file", text: ch ? displayName(ch) : state.current.fileName, ext: extClass(state.current.fileName) },
   ];
   parts.forEach((p, i) => {
-    if (i > 0) { const sep = el("span", "sep ico"); sep.innerHTML = ICONS["chevron-right"]; bc.appendChild(sep); }
+    if (i > 0) { const sep = el("span", "sep " + codiCls("chevron-right")); bc.appendChild(sep); }
     const crumb = el("span", "crumb");
-    const ico = el("span", "ico " + (p.ext || ""));
-    ico.innerHTML = ICONS[p.icon];
+    const ico = el("span", codiCls(p.icon, p.ext || ""));
     crumb.appendChild(ico);
     crumb.appendChild(el("span", null, p.text));
     bc.appendChild(crumb);
