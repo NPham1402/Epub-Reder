@@ -45,6 +45,23 @@ const esc = (s) =>
   String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
 const tabKey = (b, i) => `${b}:${i}`;
 
+// Escape prose but colour quoted dialogue ("…", “…”, «…») as a "string" so
+// conversations stand out — and it fits the code-doc disguise.
+const QUOTE_RE = /"[^"]*"|“[^”]*”|«[^»]*»/g;
+function highlightProse(text) {
+  let out = "";
+  let last = 0;
+  let m;
+  QUOTE_RE.lastIndex = 0;
+  while ((m = QUOTE_RE.exec(text)) !== null) {
+    out += esc(text.slice(last, m.index));
+    out += `<span class="tok-string">${esc(m[0])}</span>`;
+    last = m.index + m[0].length;
+  }
+  out += esc(text.slice(last));
+  return out;
+}
+
 function loadSettings() {
   let s = {};
   try { s = JSON.parse(localStorage.getItem("devdocs.settings") || "{}"); } catch {}
@@ -152,11 +169,11 @@ async function loadBookIndex(book) {
     if (!res.ok) return false;
     data = await res.json();
   }
-  book._chapters = data.chapters || [];
+  book._chapters = (data.chapters || []).map((c) => ({ ...c, title: c.title ? c.title.normalize("NFC") : c.title }));
   computeLabels(book._chapters);
   book._progress = data.progress || null;
   if (data.code_name) book.code_name = data.code_name;
-  if (data.title) book.title = data.title;
+  if (data.title) book.title = data.title.normalize("NFC");
   return true;
 }
 
@@ -168,7 +185,9 @@ async function loadChapter(book, idx) {
   const res = await api(`/api/books/${book.id}/chapters/${idx}`);
   if (!res.ok) return null;
   const data = await res.json();
-  ch._blocks = data.blocks || [];
+  // Normalize to NFC so combining Vietnamese diacritics compose into single
+  // glyphs — otherwise serif fonts render "a + ◌̂ + ◌́" as a broken "ấ".
+  ch._blocks = (data.blocks || []).map((b) => ({ type: b.type, text: (b.text || "").normalize("NFC") }));
   return ch;
 }
 
@@ -434,7 +453,7 @@ function renderContent(ch) {
       line("rc", `<span class="tok-comment">// </span>${esc(b.text)}`, b.text.length, "c");
       blank();
     } else {
-      line("rp", esc(b.text), b.text.length, "p");
+      line("rp", highlightProse(b.text), b.text.length, "p");
       blank();
     }
   }

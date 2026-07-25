@@ -227,7 +227,7 @@ kbd {
   font-family: var(--font-read); font-size: var(--code-size); line-height: 1.6;
   padding: 4px 0 40vh; color: var(--editor-fg);
 }
-.code.serif { font-family: Georgia, "Times New Roman", serif; line-height: 1.85; }
+.code.serif { font-family: Cambria, "Palatino Linotype", Georgia, "Times New Roman", serif; line-height: 1.9; }
 .row { display: flex; min-height: 1.6em; }
 .row .ln {
   flex: 0 0 62px; width: 62px; text-align: right; padding-right: 24px;
@@ -236,6 +236,7 @@ kbd {
 .row.active-line .ln { color: var(--ln-active); }
 .row .lc { flex: 1 1 auto; white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 28px; }
 .row.rp .lc { max-width: var(--read-width); }
+.row.rp:hover { background: rgba(255, 255, 255, 0.028); }
 .row.rh .lc { color: var(--tok-heading); font-weight: 700; max-width: var(--read-width); }
 .row.rc .lc { color: var(--tok-comment); }
 .row.active-line { background: rgba(255, 255, 255, 0.04); }
