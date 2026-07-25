@@ -45,21 +45,89 @@ const esc = (s) =>
   String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
 const tabKey = (b, i) => `${b}:${i}`;
 
-// Escape prose but colour quoted dialogue ("…", “…”, «…») as a "string" so
-// conversations stand out — and it fits the code-doc disguise.
+// Dialogue quotes to colour as "strings".
 const QUOTE_RE = /"[^"]*"|“[^”]*”|«[^»]*»/g;
-function highlightProse(text) {
-  let out = "";
-  let last = 0;
-  let m;
+
+// Render a paragraph: escape text, colour quoted dialogue, apply saved
+// highlight ranges. Splits at every interval boundary so dialogue and
+// highlights can overlap cleanly.
+function renderParagraph(text, hls) {
+  const n = text.length;
+  const q = [];
   QUOTE_RE.lastIndex = 0;
-  while ((m = QUOTE_RE.exec(text)) !== null) {
-    out += esc(text.slice(last, m.index));
-    out += `<span class="tok-string">${esc(m[0])}</span>`;
-    last = m.index + m[0].length;
+  let m;
+  while ((m = QUOTE_RE.exec(text)) !== null) q.push([m.index, m.index + m[0].length]);
+  const H = (hls || []).map((h) => [Math.max(0, h.start), Math.min(n, h.end)]).filter((h) => h[1] > h[0]);
+  const pts = new Set([0, n]);
+  for (const [a, b] of q) { pts.add(a); pts.add(b); }
+  for (const [a, b] of H) { pts.add(a); pts.add(b); }
+  const bs = [...pts].filter((p) => p >= 0 && p <= n).sort((a, b) => a - b);
+  const covers = (pos, arr) => arr.some(([a, b]) => pos >= a && pos < b);
+  let out = "";
+  for (let i = 0; i < bs.length - 1; i++) {
+    const s = bs[i], e = bs[i + 1];
+    if (e <= s) continue;
+    const seg = esc(text.slice(s, e));
+    const cls = (covers(s, q) ? "tok-string" : "") + (covers(s, H) ? (covers(s, q) ? " hl" : "hl") : "");
+    out += cls ? `<span class="${cls}">${seg}</span>` : seg;
   }
-  out += esc(text.slice(last));
   return out;
+}
+
+// ---- Manual highlighter (marker) -------------------------------------------
+const hlKey = (bookId, idx) => `devdocs.hl:${bookId}:${idx}`;
+function loadHighlights(bookId, idx) {
+  try { return JSON.parse(localStorage.getItem(hlKey(bookId, idx)) || "[]"); } catch { return []; }
+}
+function saveHighlights() {
+  if (!state.current) return;
+  localStorage.setItem(hlKey(state.current.bookId, state.current.idx), JSON.stringify(state.hl));
+}
+function textOffset(container, node, offset) {
+  const r = document.createRange();
+  r.selectNodeContents(container);
+  try { r.setEnd(node, offset); } catch { return 0; }
+  return r.toString().length;
+}
+function closestRp(node) {
+  const el = node && node.nodeType === 3 ? node.parentElement : node;
+  return el && el.closest ? el.closest(".row.rp") : null;
+}
+function rerenderParagraph(p) {
+  const row = $("#code").querySelector(`.row.rp[data-p="${p}"]`);
+  if (!row || !state.current) return;
+  const ch = chapterOf(state.current.bookId, state.current.idx);
+  const b = ((ch && (ch._blocks || ch.blocks)) || [])[p];
+  if (!b) return;
+  row.querySelector(".lc").innerHTML = renderParagraph(b.text, state.hl.filter((h) => h.p === p));
+}
+function addHighlight(p, start, end) {
+  state.hl.push({ p, start, end });
+  saveHighlights();
+  rerenderParagraph(p);
+}
+function removeHighlightAt(p, pos) {
+  const before = state.hl.length;
+  state.hl = state.hl.filter((h) => !(h.p === p && pos >= h.start && pos < h.end));
+  if (state.hl.length !== before) { saveHighlights(); rerenderParagraph(p); }
+}
+
+// ---- Focus current paragraph ------------------------------------------------
+function cacheProseRows() {
+  state.proseRows = [...$("#code").querySelectorAll(".row.rp")].map((el) => ({ el, top: el.offsetTop }));
+}
+function updateReadingFocus() {
+  if (!state.settings.readFocus) return;
+  const rows = state.proseRows;
+  if (!rows || !rows.length) return;
+  const editor = $("#editor");
+  const center = editor.scrollTop + editor.clientHeight * 0.42;
+  let active = rows[0].el;
+  for (const r of rows) { if (r.top <= center) active = r.el; else break; }
+  if (state.readingEl === active) return;
+  if (state.readingEl) state.readingEl.classList.remove("reading");
+  active.classList.add("reading");
+  state.readingEl = active;
 }
 
 function loadSettings() {
@@ -69,6 +137,7 @@ function loadSettings() {
     blurHide: !!s.blurHide,
     camo: !!s.camo,
     serif: !!s.serif,
+    readFocus: s.readFocus !== false,
     fontSize: s.fontSize || 15,
     readWidth: s.readWidth || 82,
   };
@@ -413,7 +482,9 @@ function renderContent(ch) {
   $("#welcome").hidden = true;
   code.hidden = false;
   code.classList.toggle("serif", state.settings.serif);
+  code.classList.toggle("focusread", !!state.settings.readFocus);
   code.innerHTML = "";
+  state.hl = loadHighlights(state.current.bookId, ch.idx);
 
   const mm = [];
   let n = 0;
@@ -446,17 +517,18 @@ function renderContent(ch) {
   const firstIsHeading = blocks.length && blocks[0].type !== "p";
   if (!firstIsHeading && ch.title) heading(ch.title, 1);
 
-  for (const b of blocks) {
+  blocks.forEach((b, bi) => {
     if (b.type === "h1" || b.type === "h2" || b.type === "h3") {
       heading(b.text, b.type === "h1" ? 1 : b.type === "h2" ? 2 : 3);
     } else if (camo) {
       line("rc", `<span class="tok-comment">// </span>${esc(b.text)}`, b.text.length, "c");
       blank();
     } else {
-      line("rp", highlightProse(b.text), b.text.length, "p");
+      const row = line("rp", renderParagraph(b.text, state.hl.filter((h) => h.p === bi)), b.text.length, "p");
+      row.dataset.p = String(bi);
       blank();
     }
-  }
+  });
 
   // Prev / next chapter, disguised as import comments.
   const chapters = state.current.book._chapters;
@@ -476,7 +548,8 @@ function renderContent(ch) {
 
   code.appendChild(frag);
   state.mmLines = mm;
-  requestAnimationFrame(drawMinimap);
+  state.readingEl = null;
+  requestAnimationFrame(() => { drawMinimap(); cacheProseRows(); updateReadingFocus(); });
 }
 
 /* ============================ Minimap ====================================== */
@@ -546,6 +619,7 @@ function restoreScroll(key, book, idx) {
     editor.scrollTop = top;
     drawMinimap();
     updatePos();
+    updateReadingFocus();
   });
 }
 function updatePos() {
@@ -557,7 +631,7 @@ function updatePos() {
 }
 
 $("#editor").addEventListener("scroll", () => {
-  if (!state.mmRAF) state.mmRAF = requestAnimationFrame(() => { state.mmRAF = 0; drawMinimap(); });
+  if (!state.mmRAF) state.mmRAF = requestAnimationFrame(() => { state.mmRAF = 0; drawMinimap(); updateReadingFocus(); });
   updatePos();
   if (!state.current) return;
   const editor = $("#editor");
@@ -565,6 +639,41 @@ $("#editor").addEventListener("scroll", () => {
   const ratio = denom > 0 ? editor.scrollTop / denom : 0;
   clearTimeout(state.saveTimer);
   state.saveTimer = setTimeout(() => saveProgress(ratio), 700);
+});
+
+// Manual highlighter: select prose to mark it; click a mark to remove it.
+$("#code").addEventListener("mouseup", () => {
+  if (state.settings.camo || !state.current) return;
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+  const row = closestRp(range.startContainer);
+  if (!row || row !== closestRp(range.endContainer)) return;
+  const lc = row.querySelector(".lc");
+  const p = Number(row.dataset.p);
+  let start = textOffset(lc, range.startContainer, range.startOffset);
+  let end = textOffset(lc, range.endContainer, range.endOffset);
+  if (end < start) { const t = start; start = end; end = t; }
+  if (end - start < 1) return;
+  addHighlight(p, start, end);
+  sel.removeAllRanges();
+});
+$("#code").addEventListener("click", (e) => {
+  const mark = e.target.closest && e.target.closest(".hl");
+  if (!mark) return;
+  const row = e.target.closest(".row.rp");
+  if (!row) return;
+  const lc = row.querySelector(".lc");
+  const p = Number(row.dataset.p);
+  let pos = -1;
+  if (document.caretRangeFromPoint) {
+    const r = document.caretRangeFromPoint(e.clientX, e.clientY);
+    if (r) pos = textOffset(lc, r.startContainer, r.startOffset);
+  } else if (document.caretPositionFromPoint) {
+    const cp = document.caretPositionFromPoint(e.clientX, e.clientY);
+    if (cp) pos = textOffset(lc, cp.offsetNode, cp.offset);
+  }
+  if (pos >= 0) removeHighlightAt(p, pos);
 });
 
 async function saveProgress(ratio) {
@@ -640,6 +749,7 @@ function openSettings() {
   $("#opt-blur").checked = state.settings.blurHide;
   $("#opt-camo").checked = state.settings.camo;
   $("#opt-serif").checked = state.settings.serif;
+  $("#opt-focus").checked = state.settings.readFocus;
   $("#font-val").textContent = state.settings.fontSize;
   $("#width-val").textContent = state.settings.readWidth;
   $("#settings").hidden = false;
@@ -649,6 +759,13 @@ $("#btn-account").addEventListener("click", openSettings);
 $("#opt-blur").addEventListener("change", (e) => { state.settings.blurHide = e.target.checked; saveSettings(); });
 $("#opt-camo").addEventListener("change", (e) => { state.settings.camo = e.target.checked; saveSettings(); rerender(); });
 $("#opt-serif").addEventListener("change", (e) => { state.settings.serif = e.target.checked; saveSettings(); rerender(); });
+$("#opt-focus").addEventListener("change", (e) => {
+  state.settings.readFocus = e.target.checked;
+  saveSettings();
+  $("#code").classList.toggle("focusread", e.target.checked);
+  if (e.target.checked) updateReadingFocus();
+  else if (state.readingEl) { state.readingEl.classList.remove("reading"); state.readingEl = null; }
+});
 $("#font-inc").addEventListener("click", () => changeFont(1));
 $("#font-dec").addEventListener("click", () => changeFont(-1));
 $("#width-inc").addEventListener("click", () => changeWidth(4));
@@ -656,12 +773,14 @@ $("#width-dec").addEventListener("click", () => changeWidth(-4));
 function changeFont(d) {
   state.settings.fontSize = Math.min(28, Math.max(10, state.settings.fontSize + d));
   $("#font-val").textContent = state.settings.fontSize;
-  saveSettings(); applySettingsToDom(); requestAnimationFrame(drawMinimap);
+  saveSettings(); applySettingsToDom();
+  requestAnimationFrame(() => { drawMinimap(); cacheProseRows(); updateReadingFocus(); });
 }
 function changeWidth(d) {
   state.settings.readWidth = Math.min(140, Math.max(50, state.settings.readWidth + d));
   $("#width-val").textContent = state.settings.readWidth;
   saveSettings(); applySettingsToDom();
+  requestAnimationFrame(() => { drawMinimap(); cacheProseRows(); updateReadingFocus(); });
 }
 function applySettingsToDom() {
   const r = document.documentElement.style;

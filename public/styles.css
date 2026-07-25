@@ -244,6 +244,15 @@ kbd {
 .tok-heading { color: var(--tok-heading); font-weight: 700; }
 .tok-keyword { color: var(--tok-keyword); }
 .tok-string { color: var(--tok-string); }
+/* Dialogue stands out more in the reading pane. */
+.code .tok-string { font-weight: 600; }
+/* Manual highlighter marks. */
+.hl { background: rgba(255, 208, 0, 0.24); border-radius: 2px; cursor: pointer; }
+.hl:hover { background: rgba(255, 208, 0, 0.36); }
+/* Focus current paragraph: dim the rest. */
+.code.focusread .row.rp { opacity: 0.34; transition: opacity 0.18s ease; }
+.code.focusread .row.rp.reading { opacity: 1; }
+.setting-tip small { color: var(--fg-muted); }
 .tok-type { color: var(--tok-type); }
 .navline { cursor: pointer; }
 .navline:hover .lc { text-decoration: underline; }
