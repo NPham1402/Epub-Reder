@@ -845,6 +845,10 @@ document.addEventListener("keydown", (e) => {
   else if (mod && e.key === "-") { e.preventDefault(); changeFont(-1); }
   else if (isBare(e) && e.key === "ArrowRight") { e.preventDefault(); navChapter(1); }
   else if (isBare(e) && e.key === "ArrowLeft") { e.preventDefault(); navChapter(-1); }
+  else if (isBare(e) && e.key.toLowerCase() === "d") { e.preventDefault(); navChapter(1); }
+  else if (isBare(e) && e.key.toLowerCase() === "a") { e.preventDefault(); navChapter(-1); }
+  else if (isBare(e) && e.key.toLowerCase() === "w") { e.preventDefault(); $("#editor").scrollBy(0, -60); }
+  else if (isBare(e) && e.key.toLowerCase() === "s") { e.preventDefault(); $("#editor").scrollBy(0, 60); }
   else if (e.altKey && /^[1-9]$/.test(e.key)) { e.preventDefault(); switchToTabIndex(Number(e.key) - 1); }
 });
 window.addEventListener("resize", () => requestAnimationFrame(drawMinimap));
