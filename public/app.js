@@ -826,6 +826,23 @@ function isBare(e) {
   if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return false;
   return true;
 }
+// Continuous WASD scroll: held keys drive a rAF loop instead of jumping
+// per keydown, so movement feels fluid (and immune to OS key-repeat delay).
+const moveKeys = { w: false, s: false };
+let moveRAF = null;
+function moveLoop() {
+  const editor = $("#editor");
+  let speed = 0;
+  if (moveKeys.w) speed -= 16;
+  if (moveKeys.s) speed += 16;
+  if (speed) editor.scrollTop += speed;
+  if (moveKeys.w || moveKeys.s) moveRAF = requestAnimationFrame(moveLoop);
+  else moveRAF = null;
+}
+function stopMoveKeys() {
+  moveKeys.w = false;
+  moveKeys.s = false;
+}
 document.addEventListener("keydown", (e) => {
   // Focus mode (boss key): "\" opens it, Esc closes it.
   if (panicVisible) {
@@ -847,10 +864,21 @@ document.addEventListener("keydown", (e) => {
   else if (isBare(e) && e.key === "ArrowLeft") { e.preventDefault(); navChapter(-1); }
   else if (isBare(e) && e.key.toLowerCase() === "d") { e.preventDefault(); navChapter(1); }
   else if (isBare(e) && e.key.toLowerCase() === "a") { e.preventDefault(); navChapter(-1); }
-  else if (isBare(e) && e.key.toLowerCase() === "w") { e.preventDefault(); $("#editor").scrollBy(0, -60); }
-  else if (isBare(e) && e.key.toLowerCase() === "s") { e.preventDefault(); $("#editor").scrollBy(0, 60); }
+  else if (isBare(e) && e.key.toLowerCase() === "w") {
+    e.preventDefault();
+    if (!moveKeys.w) { moveKeys.w = true; if (!moveRAF) moveRAF = requestAnimationFrame(moveLoop); }
+  }
+  else if (isBare(e) && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    if (!moveKeys.s) { moveKeys.s = true; if (!moveRAF) moveRAF = requestAnimationFrame(moveLoop); }
+  }
   else if (e.altKey && /^[1-9]$/.test(e.key)) { e.preventDefault(); switchToTabIndex(Number(e.key) - 1); }
 });
+document.addEventListener("keyup", (e) => {
+  const k = e.key.toLowerCase();
+  if (k === "w" || k === "s") moveKeys[k] = false;
+});
+window.addEventListener("blur", stopMoveKeys);
 window.addEventListener("resize", () => requestAnimationFrame(drawMinimap));
 
 /* ============================ Panic content =============================== */
