@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
-import type { Env, ParsedChapter } from "./types";
+import type { Env, ParsedBookMeta } from "./types";
 import { parseEpub } from "./epub";
 import { fakeCodeName, fakeFileName } from "./names";
 import { passcodeMatches, signSession, verifySession } from "./auth";
@@ -8,6 +8,9 @@ import { passcodeMatches, signSession, verifySession } from "./auth";
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 const MAX_EPUB_BYTES = 80 * 1024 * 1024; // 80 MB guard
 const META_PER_BATCH = 150; // chapter-metadata inserts per D1 batch
+// R2 multipart parts must all be the exact same size except the last, and
+// >= 5MiB; 8MiB gives headroom above that minimum.
+const PART_MIN_BYTES = 8 * 1024 * 1024;
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -27,54 +30,143 @@ interface ChapterMeta {
   length: number;
 }
 
-// Serialize every chapter into one contiguous byte blob and record each
-// chapter's byte range. Offsets are UTF-8 byte positions (not char counts).
-function buildContent(chapters: ParsedChapter[]): { blob: Uint8Array; meta: ChapterMeta[] } {
-  const enc = new TextEncoder();
-  const parts: Uint8Array[] = [];
-  const meta: ChapterMeta[] = [];
-  let offset = 0;
-  for (let i = 0; i < chapters.length; i++) {
-    const ch = chapters[i];
-    const bytes = enc.encode(JSON.stringify(ch.blocks));
-    parts.push(bytes);
-    meta.push({
-      idx: i,
-      title: ch.title,
-      file_name: fakeFileName(i),
-      char_count: ch.blocks.reduce((s, b) => s + b.text.length, 0),
-      offset,
-      length: bytes.length,
-    });
-    offset += bytes.length;
+// Accumulates chapter byte-blocks and writes them to one contiguous R2
+// object without ever holding the whole book in memory at once. R2 requires
+// every multipart part except the last to be exactly the same size (not
+// merely "at least 5MiB"), so once buffered data reaches PART_SIZE_BYTES we
+// slice off exactly that many bytes as a part and keep any overflow for the
+// next one. Small books that never reach the threshold fall back to a
+// single put() so the common case doesn't pay for multipart overhead.
+class ContentWriter {
+  private multipart: R2MultipartUpload | null = null;
+  private parts: R2UploadedPart[] = [];
+  private partNumber = 1;
+  private pending: Uint8Array[] = [];
+  private pendingLen = 0;
+  private offset = 0;
+
+  constructor(private env: Env, private key: string) {}
+
+  // Records `bytes` at the next offset and returns its {offset, length}.
+  async append(bytes: Uint8Array): Promise<{ offset: number; length: number }> {
+    const offset = this.offset;
+    this.pending.push(bytes);
+    this.pendingLen += bytes.length;
+    this.offset += bytes.length;
+    while (this.pendingLen >= PART_MIN_BYTES) await this.flushPart(PART_MIN_BYTES);
+    return { offset, length: bytes.length };
   }
-  const blob = new Uint8Array(offset);
-  let pos = 0;
-  for (const p of parts) { blob.set(p, pos); pos += p.length; }
-  return { blob, meta };
+
+  // Merges buffered chunks into one contiguous view (copying only when more
+  // than one chunk is pending).
+  private mergePending(): Uint8Array {
+    if (this.pending.length <= 1) return this.pending[0] ?? new Uint8Array(0);
+    const out = new Uint8Array(this.pendingLen);
+    let pos = 0;
+    for (const chunk of this.pending) { out.set(chunk, pos); pos += chunk.length; }
+    return out;
+  }
+
+  // Uploads exactly `size` bytes as one part, keeping any overflow buffered.
+  private async flushPart(size: number): Promise<void> {
+    if (!this.multipart) {
+      this.multipart = await this.env.BOOKS.createMultipartUpload(this.key, {
+        httpMetadata: { contentType: "application/octet-stream" },
+      });
+    }
+    const merged = this.mergePending();
+    const chunk = merged.subarray(0, size);
+    const rest = merged.subarray(size);
+    this.pending = rest.length ? [rest] : [];
+    this.pendingLen = rest.length;
+    const part = await this.multipart.uploadPart(this.partNumber++, chunk);
+    this.parts.push(part);
+  }
+
+  async finish(): Promise<void> {
+    if (!this.multipart) {
+      await this.env.BOOKS.put(this.key, this.mergePending(), {
+        httpMetadata: { contentType: "application/octet-stream" },
+      });
+      return;
+    }
+    if (this.pendingLen > 0) {
+      const part = await this.multipart.uploadPart(this.partNumber++, this.mergePending());
+      this.parts.push(part);
+    }
+    await this.multipart.complete(this.parts);
+  }
+
+  async abort(): Promise<void> {
+    if (this.multipart) { try { await this.multipart.abort(); } catch {} }
+  }
 }
 
-// Insert chapter metadata (small — no blocks) in bounded batches.
-async function writeChapterMeta(env: Env, bookId: string, meta: ChapterMeta[]): Promise<void> {
-  for (let i = 0; i < meta.length; i += META_PER_BATCH) {
-    const slice = meta.slice(i, i + META_PER_BATCH);
+// Buffers chapter-metadata rows (small — no blocks) and inserts them in
+// bounded D1 batches as they arrive, instead of waiting for the whole book.
+class MetaWriter {
+  private pending: ChapterMeta[] = [];
+  constructor(private env: Env, private bookId: string) {}
+
+  async add(meta: ChapterMeta): Promise<void> {
+    this.pending.push(meta);
+    if (this.pending.length >= META_PER_BATCH) await this.flush();
+  }
+
+  async flush(): Promise<void> {
+    if (this.pending.length === 0) return;
+    const slice = this.pending;
+    this.pending = [];
     const stmts = slice.map((m) =>
-      env.DB.prepare(
+      this.env.DB.prepare(
         `INSERT INTO chapters (book_id, idx, title, file_name, content_key, char_count, byte_offset, byte_length)
          VALUES (?, ?, ?, ?, '', ?, ?, ?)`,
-      ).bind(bookId, m.idx, m.title, m.file_name, m.char_count, m.offset, m.length),
+      ).bind(this.bookId, m.idx, m.title, m.file_name, m.char_count, m.offset, m.length),
     );
-    await env.DB.batch(stmts);
+    await this.env.DB.batch(stmts);
   }
 }
 
-// Store one book's content blob + metadata. Used by upload and reindex.
-async function storeBookContent(env: Env, bookId: string, chapters: ParsedChapter[]): Promise<void> {
-  const { blob, meta } = buildContent(chapters);
-  await env.BOOKS.put(contentBinKey(bookId), blob, {
-    httpMetadata: { contentType: "application/octet-stream" },
-  });
-  await writeChapterMeta(env, bookId, meta);
+// Parses an EPUB and streams its chapters straight into R2 + D1 as they're
+// decoded — no per-book array is ever fully materialized in memory, so
+// upload time no longer scales with chapter count. `onMeta` fires once,
+// before any chapter, so the caller can create the book's row first (chapter
+// rows below reference it via FOREIGN KEY). On any failure, whatever chapter
+// rows/parts were written for this attempt are rolled back so the book is
+// left either fully ingested or absent, never half-written.
+async function ingestBook(
+  env: Env,
+  bookId: string,
+  bytes: Uint8Array,
+  onMeta: (meta: ParsedBookMeta) => Promise<void>,
+): Promise<{ chapterCount: number }> {
+  const content = new ContentWriter(env, contentBinKey(bookId));
+  const meta = new MetaWriter(env, bookId);
+  const enc = new TextEncoder();
+  try {
+    const result = await parseEpub(bytes, {
+      onMeta,
+      onChapter: async (chapter) => {
+        const encoded = enc.encode(JSON.stringify(chapter.blocks));
+        const { offset, length } = await content.append(encoded);
+        await meta.add({
+          idx: chapter.order,
+          title: chapter.title,
+          file_name: fakeFileName(chapter.order),
+          char_count: chapter.blocks.reduce((s, b) => s + b.text.length, 0),
+          offset,
+          length,
+        });
+      },
+    });
+    await meta.flush();
+    await content.finish();
+    return result;
+  } catch (err) {
+    await content.abort();
+    await env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(bookId).run().catch(() => {});
+    throw err;
+  }
 }
 
 // --- Auth gate for all API routes except login/logout ------------------------
@@ -127,23 +219,33 @@ app.post("/api/books", async (c) => {
     if (buffer.byteLength > MAX_EPUB_BYTES) return c.json({ error: "file too large" }, 413);
     const bytes = new Uint8Array(buffer);
 
-    let book;
-    try { book = parseEpub(bytes); }
-    catch (err) { return c.json({ error: "could not parse EPUB: " + errMsg(err) }, 422); }
-
     id = crypto.randomUUID();
-    const codeName = fakeCodeName(book.title);
-    const now = Date.now();
+    const bookId = id;
     rawKey = `raw/${id}.epub`;
-
     await c.env.BOOKS.put(rawKey, bytes, { httpMetadata: { contentType: "application/epub+zip" } });
-    await c.env.DB.prepare(
-      `INSERT INTO books (id, title, author, language, r2_key, code_name, chapter_count, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).bind(id, book.title, book.author, book.language, rawKey, codeName, book.chapters.length, now).run();
-    await storeBookContent(c.env, id, book.chapters);
 
-    return c.json({ id, title: book.title, code_name: codeName, chapters: book.chapters.length });
+    let bookMeta: ParsedBookMeta | null = null;
+    let codeName = "";
+    let result;
+    try {
+      result = await ingestBook(c.env, bookId, bytes, async (meta) => {
+        bookMeta = meta;
+        codeName = fakeCodeName(meta.title);
+        await c.env.DB.prepare(
+          `INSERT INTO books (id, title, author, language, r2_key, code_name, chapter_count, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+        ).bind(bookId, meta.title, meta.author, meta.language, rawKey, codeName, Date.now()).run();
+      });
+    } catch (err) {
+      // Nothing was committed yet (onMeta never ran) — a clean parse failure.
+      if (!bookMeta) return c.json({ error: "could not parse EPUB: " + errMsg(err) }, 422);
+      throw err;
+    }
+
+    await c.env.DB.prepare(`UPDATE books SET chapter_count = ? WHERE id = ?`)
+      .bind(result.chapterCount, bookId).run();
+
+    return c.json({ id, title: bookMeta!.title, code_name: codeName, chapters: result.chapterCount });
   } catch (err) {
     if (id) {
       try {
@@ -229,17 +331,20 @@ app.post("/api/books/:id/reindex", async (c) => {
   if (!obj) return c.json({ error: "raw epub missing" }, 404);
   const bytes = new Uint8Array(await obj.arrayBuffer());
 
-  let parsed;
-  try { parsed = parseEpub(bytes); }
-  catch (err) { return c.json({ error: "parse failed: " + errMsg(err) }, 422); }
-
   await c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id).run();
-  await storeBookContent(c.env, id, parsed.chapters);
+
+  let result;
+  try {
+    result = await ingestBook(c.env, id, bytes, () => Promise.resolve());
+  } catch (err) {
+    return c.json({ error: "parse failed: " + errMsg(err) }, 422);
+  }
+
   await c.env.DB.prepare(`UPDATE books SET chapter_count = ? WHERE id = ?`)
-    .bind(parsed.chapters.length, id).run();
+    .bind(result.chapterCount, id).run();
   await c.env.BOOKS.delete(legacyContentKey(id));
 
-  return c.json({ ok: true, chapters: parsed.chapters.length });
+  return c.json({ ok: true, chapters: result.chapterCount });
 });
 
 // --- Progress ----------------------------------------------------------------

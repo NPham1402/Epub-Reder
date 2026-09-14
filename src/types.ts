@@ -22,9 +22,8 @@ export interface ParsedChapter {
   blocks: TextBlock[];
 }
 
-export interface ParsedBook {
+export interface ParsedBookMeta {
   title: string;
   author: string | null;
   language: string | null;
-  chapters: ParsedChapter[];
 }

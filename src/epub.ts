@@ -1,7 +1,20 @@
 import { unzipSync, strFromU8 } from "fflate";
 import { XMLParser } from "fast-xml-parser";
 import { Parser as HtmlParser } from "htmlparser2";
-import type { BlockType, ParsedBook, ParsedChapter, TextBlock } from "./types";
+import type { BlockType, ParsedBookMeta, ParsedChapter, TextBlock } from "./types";
+
+export interface EpubCallbacks {
+  // Called once, after the OPF/manifest/TOC are parsed but before any chapter
+  // is decoded — lets the caller create the book's DB row up front so
+  // chapter rows (inserted per-chapter as streaming proceeds) always have a
+  // parent to reference.
+  onMeta: (meta: ParsedBookMeta) => void | Promise<void>;
+  // Called once per spine chapter, in reading order. The caller should
+  // persist/serialize the chapter immediately and let it go — parseEpub does
+  // not retain chapters after this returns, which is what keeps memory
+  // bounded for books with thousands of chapters.
+  onChapter: (chapter: ParsedChapter) => void | Promise<void>;
+}
 
 interface ManifestItem {
   href: string;
@@ -157,7 +170,14 @@ function collectNav(html: string, navPath: string, map: Map<string, string>): vo
   parser.end();
 }
 
-export function parseEpub(data: Uint8Array): ParsedBook {
+// Parses an EPUB and streams its chapters out one at a time via callbacks
+// instead of returning them all as one in-memory array. A book with a few
+// thousand chapters can hold tens of MB of decoded text; retaining every
+// chapter until the end (plus the still-live decompressed zip contents)
+// is what pushes a Worker isolate over its memory limit. Discarding each
+// chapter's blocks as soon as the caller has consumed them keeps peak memory
+// roughly constant regardless of book length.
+export async function parseEpub(data: Uint8Array, cb: EpubCallbacks): Promise<{ chapterCount: number }> {
   const files = unzipSync(data);
   const xml = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", trimValues: true });
 
@@ -207,8 +227,12 @@ export function parseEpub(data: Uint8Array): ParsedBook {
     collectNcx(ncx?.ncx?.navMap?.navPoint, ncxItem.href, tocMap);
   }
 
-  // Walk the spine in reading order.
-  const chapters: ParsedChapter[] = [];
+  await cb.onMeta({ title, author, language });
+
+  // Walk the spine in reading order, streaming each chapter to the caller
+  // and dropping our own reference to its decompressed source (`files[href]`)
+  // right after — freeing that share of the unzipped archive incrementally
+  // instead of holding the whole thing until the request ends.
   let order = 0;
   for (const ref of toArray<Record<string, unknown>>(pkg.spine?.itemref)) {
     const idref = String(ref["@_idref"] ?? "");
@@ -220,6 +244,7 @@ export function parseEpub(data: Uint8Array): ParsedBook {
     if (!raw) continue;
 
     const blocks = extractBlocks(strFromU8(raw));
+    delete files[item.href];
     if (blocks.length === 0) continue;
 
     const chapterTitle =
@@ -227,10 +252,10 @@ export function parseEpub(data: Uint8Array): ParsedBook {
       blocks.find((b) => b.type !== "p")?.text.slice(0, 120) ||
       null;
 
-    chapters.push({ order, id: idref, href: item.href, title: chapterTitle, blocks });
+    await cb.onChapter({ order, id: idref, href: item.href, title: chapterTitle, blocks });
     order++;
   }
 
-  if (chapters.length === 0) throw new Error("No readable chapters found in EPUB");
-  return { title, author, language, chapters };
+  if (order === 0) throw new Error("No readable chapters found in EPUB");
+  return { chapterCount: order };
 }
