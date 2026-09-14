@@ -234,6 +234,7 @@ async function loadBookIndex(book) {
   if ((!data.chapters || !data.chapters.length) && data.chapter_count > 0) {
     // Old-format book (content stored as one blob) — re-index from its .epub.
     await api(`/api/books/${book.id}/reindex`, { method: "POST" }).catch(() => {});
+    await ingestChapters(book.id).catch(() => {});
     res = await api(`/api/books/${book.id}/index`);
     if (!res.ok) return false;
     data = await res.json();
@@ -723,6 +724,20 @@ fileInput.addEventListener("change", () => { if (fileInput.files[0]) uploadFile(
 ["dragleave", "drop"].forEach((ev) => dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove("drag"); }));
 dropzone.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if (f) uploadFile(f); });
 
+// Drives a book's chunked ingestion (see /api/books/:id/ingest-chunk) to
+// completion — each call processes a bounded slice of chapters server-side,
+// so a book with thousands of chapters can't blow a single request's CPU
+// budget. onProgress(processed, total) fires after every chunk.
+async function ingestChapters(bookId, onProgress) {
+  for (;;) {
+    const res = await api(`/api/books/${bookId}/ingest-chunk`, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: data.error || `HTTP ${res.status}` };
+    if (onProgress) onProgress(data.processed || 0, data.total || 0);
+    if (data.done) return { ok: true, total: data.total || 0 };
+  }
+}
+
 async function uploadFile(file) {
   const status = $("#upload-status");
   status.hidden = false;
@@ -732,16 +747,26 @@ async function uploadFile(file) {
   fd.append("file", file);
   const res = await api("/api/books", { method: "POST", body: fd });
   const data = await res.json().catch(() => ({}));
-  if (res.ok) {
-    status.textContent = `> indexed as "${data.code_name}" · ${data.chapters} files`;
-    const list = await api("/api/books").then((r) => r.json());
-    state.books = list.books;
-    renderTree();
-    setTimeout(() => { $("#upload").hidden = true; status.hidden = true; }, 1200);
-  } else {
+  if (!res.ok) {
     status.classList.add("err");
     status.textContent = `! ${data.error || "upload failed (HTTP " + res.status + ")"}`;
+    return;
   }
+
+  const result = await ingestChapters(data.id, (processed, total) => {
+    status.textContent = `> indexing "${data.code_name}" … ${processed}/${total}`;
+  });
+  if (!result.ok) {
+    status.classList.add("err");
+    status.textContent = `! ${result.error}`;
+    return;
+  }
+
+  status.textContent = `> indexed as "${data.code_name}" · ${result.total} files`;
+  const list = await api("/api/books").then((r) => r.json());
+  state.books = list.books;
+  renderTree();
+  setTimeout(() => { $("#upload").hidden = true; status.hidden = true; }, 1200);
 }
 
 /* ============================ Settings ==================================== */

@@ -1,19 +1,26 @@
 import { unzipSync, strFromU8 } from "fflate";
 import { XMLParser } from "fast-xml-parser";
 import { Parser as HtmlParser } from "htmlparser2";
-import type { BlockType, ParsedBookMeta, ParsedChapter, TextBlock } from "./types";
+import type { BlockType, TextBlock } from "./types";
 
-export interface EpubCallbacks {
-  // Called once, after the OPF/manifest/TOC are parsed but before any chapter
-  // is decoded — lets the caller create the book's DB row up front so
-  // chapter rows (inserted per-chapter as streaming proceeds) always have a
-  // parent to reference.
-  onMeta: (meta: ParsedBookMeta) => void | Promise<void>;
-  // Called once per spine chapter, in reading order. The caller should
-  // persist/serialize the chapter immediately and let it go — parseEpub does
-  // not retain chapters after this returns, which is what keeps memory
-  // bounded for books with thousands of chapters.
-  onChapter: (chapter: ParsedChapter) => void | Promise<void>;
+export interface SpineItem {
+  order: number;
+  id: string;
+  href: string;
+}
+
+export interface ParsedEpubMeta {
+  title: string;
+  author: string | null;
+  language: string | null;
+  spine: SpineItem[];
+  tocMap: Map<string, string>;
+}
+
+export interface ChapterRangeResult {
+  order: number;
+  title: string | null;
+  blocks: TextBlock[];
 }
 
 interface ManifestItem {
@@ -170,26 +177,29 @@ function collectNav(html: string, navPath: string, map: Map<string, string>): vo
   parser.end();
 }
 
-// Parses an EPUB and streams its chapters out one at a time via callbacks
-// instead of returning them all as one in-memory array. A book with a few
-// thousand chapters can hold tens of MB of decoded text; retaining every
-// chapter until the end (plus the still-live decompressed zip contents)
-// is what pushes a Worker isolate over its memory limit. Discarding each
-// chapter's blocks as soon as the caller has consumed them keeps peak memory
-// roughly constant regardless of book length.
-export async function parseEpub(data: Uint8Array, cb: EpubCallbacks): Promise<{ chapterCount: number }> {
-  const files = unzipSync(data);
+// Parses only the EPUB's structure — container.xml, the OPF package, and the
+// nav/NCX table of contents — never touching chapter HTML. Each unzipSync
+// call below is filtered to one specific small file, so fflate skips
+// decompressing everything else in the archive. That makes this safe to
+// re-run on every ingest-chunk request (see index.ts) without its cost
+// scaling with book size: a 3000-chapter book and a 10-chapter book cost
+// roughly the same here.
+export function parseEpubMeta(data: Uint8Array): ParsedEpubMeta {
   const xml = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", trimValues: true });
 
-  const containerRaw = files["META-INF/container.xml"];
+  const containerFiles = unzipSync(data, { filter: (f) => f.name === "META-INF/container.xml" });
+  const containerRaw = containerFiles["META-INF/container.xml"];
   if (!containerRaw) throw new Error("Not a valid EPUB: missing META-INF/container.xml");
   const container = xml.parse(strFromU8(containerRaw));
   const rootfileNode = container?.container?.rootfiles?.rootfile;
   const rootfile = Array.isArray(rootfileNode) ? rootfileNode[0] : rootfileNode;
   const opfPath: string | undefined = rootfile?.["@_full-path"];
-  if (!opfPath || !files[opfPath]) throw new Error("Not a valid EPUB: missing OPF package file");
+  if (!opfPath) throw new Error("Not a valid EPUB: missing OPF package file");
 
-  const opf = xml.parse(strFromU8(files[opfPath]));
+  const opfFiles = unzipSync(data, { filter: (f) => f.name === opfPath });
+  const opfRaw = opfFiles[opfPath];
+  if (!opfRaw) throw new Error("Not a valid EPUB: missing OPF package file");
+  const opf = xml.parse(strFromU8(opfRaw));
   const pkg = opf?.package;
   if (!pkg) throw new Error("Not a valid EPUB: unreadable OPF package");
   const metadata = pkg.metadata ?? {};
@@ -211,28 +221,28 @@ export async function parseEpub(data: Uint8Array, cb: EpubCallbacks): Promise<{ 
     });
   }
 
-  // Build TOC title map from nav (EPUB 3) and/or NCX (EPUB 2).
-  const tocMap = new Map<string, string>();
-  const navItem = [...manifest.values()].find((m) =>
-    m.properties.split(/\s+/).includes("nav"),
-  );
-  if (navItem && files[navItem.href]) {
-    collectNav(strFromU8(files[navItem.href]), navItem.href, tocMap);
-  }
+  // Build TOC title map from nav (EPUB 3) and/or NCX (EPUB 2) — fetched in
+  // one more filtered pass, together, since both are cheap and small.
+  const navItem = [...manifest.values()].find((m) => m.properties.split(/\s+/).includes("nav"));
   const tocId: string | undefined = pkg.spine?.["@_toc"];
   const ncxItem = (tocId && manifest.get(tocId)) ||
     [...manifest.values()].find((m) => m.mediaType === "application/x-dtbncx+xml");
-  if (ncxItem && files[ncxItem.href]) {
-    const ncx = xml.parse(strFromU8(files[ncxItem.href]));
-    collectNcx(ncx?.ncx?.navMap?.navPoint, ncxItem.href, tocMap);
+
+  const tocMap = new Map<string, string>();
+  const auxHrefs = new Set<string>();
+  if (navItem) auxHrefs.add(navItem.href);
+  if (ncxItem) auxHrefs.add(ncxItem.href);
+  if (auxHrefs.size > 0) {
+    const auxFiles = unzipSync(data, { filter: (f) => auxHrefs.has(f.name) });
+    if (navItem && auxFiles[navItem.href]) collectNav(strFromU8(auxFiles[navItem.href]), navItem.href, tocMap);
+    if (ncxItem && auxFiles[ncxItem.href]) {
+      const ncx = xml.parse(strFromU8(auxFiles[ncxItem.href]));
+      collectNcx(ncx?.ncx?.navMap?.navPoint, ncxItem.href, tocMap);
+    }
   }
 
-  await cb.onMeta({ title, author, language });
-
-  // Walk the spine in reading order, streaming each chapter to the caller
-  // and dropping our own reference to its decompressed source (`files[href]`)
-  // right after — freeing that share of the unzipped archive incrementally
-  // instead of holding the whole thing until the request ends.
+  // Walk the spine in reading order, keeping only readable (X)HTML items.
+  const spine: SpineItem[] = [];
   let order = 0;
   for (const ref of toArray<Record<string, unknown>>(pkg.spine?.itemref)) {
     const idref = String(ref["@_idref"] ?? "");
@@ -240,22 +250,33 @@ export async function parseEpub(data: Uint8Array, cb: EpubCallbacks): Promise<{ 
     if (!item) continue;
     const mt = item.mediaType.toLowerCase();
     if (!(mt.includes("xhtml") || mt.includes("html"))) continue;
-    const raw = files[item.href];
-    if (!raw) continue;
-
-    const blocks = extractBlocks(strFromU8(raw));
-    delete files[item.href];
-    if (blocks.length === 0) continue;
-
-    const chapterTitle =
-      tocMap.get(item.href) ||
-      blocks.find((b) => b.type !== "p")?.text.slice(0, 120) ||
-      null;
-
-    await cb.onChapter({ order, id: idref, href: item.href, title: chapterTitle, blocks });
+    spine.push({ order, id: idref, href: item.href });
     order++;
   }
 
-  if (order === 0) throw new Error("No readable chapters found in EPUB");
-  return { chapterCount: order };
+  return { title, author, language, spine, tocMap };
+}
+
+// Extracts the content of just the given spine items. `unzipSync`'s filter
+// decompresses only files whose name is in `items` — the cost of this call
+// scales with the size of `items`, not with the whole book — so the caller
+// can process an EPUB in bounded-size chunks across multiple requests to
+// stay under a Worker's per-request CPU time limit.
+export function extractChapterRange(
+  data: Uint8Array,
+  items: SpineItem[],
+  tocMap: Map<string, string>,
+): ChapterRangeResult[] {
+  const hrefSet = new Set(items.map((i) => i.href));
+  const files = unzipSync(data, { filter: (f) => hrefSet.has(f.name) });
+  const results: ChapterRangeResult[] = [];
+  for (const item of items) {
+    const raw = files[item.href];
+    if (!raw) continue;
+    const blocks = extractBlocks(strFromU8(raw));
+    if (blocks.length === 0) continue;
+    const title = tocMap.get(item.href) || blocks.find((b) => b.type !== "p")?.text.slice(0, 120) || null;
+    results.push({ order: item.order, title, blocks });
+  }
+  return results;
 }

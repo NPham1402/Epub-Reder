@@ -14,16 +14,3 @@ export interface TextBlock {
   text: string;
 }
 
-export interface ParsedChapter {
-  order: number;
-  id: string;
-  href: string;
-  title: string | null;
-  blocks: TextBlock[];
-}
-
-export interface ParsedBookMeta {
-  title: string;
-  author: string | null;
-  language: string | null;
-}
