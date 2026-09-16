@@ -9,8 +9,9 @@ const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 const MAX_EPUB_BYTES = 80 * 1024 * 1024; // 80 MB guard
 const META_PER_BATCH = 150; // chapter-metadata inserts per D1 batch
 // R2 multipart parts must all be the exact same size except the last, and
-// >= 5MiB; 8MiB gives headroom above that minimum.
-const PART_SIZE_BYTES = 8 * 1024 * 1024;
+// >= 5MiB. Kept close to that minimum so each (occasional — see
+// ContentWriter) consolidation reads/writes as little as possible.
+const PART_SIZE_BYTES = 5 * 1024 * 1024 + 65536;
 // Chapters processed per /ingest-chunk call. Kept small: Cloudflare's Free
 // plan CPU budget per request has proven inconsistent in practice (one
 // request ran 2s of CPU before being killed, another was killed at 51ms) —
@@ -22,8 +23,9 @@ const app = new Hono<{ Bindings: Env }>();
 
 const contentBinKey = (id: string) => `books/${id}/content.bin`;
 const legacyContentKey = (id: string) => `books/${id}/content.json`;
-const pendingKey = (id: string) => `books/${id}/_pending.bin`;
 const spineMetaKey = (id: string) => `books/${id}/_spine.json`;
+const stagedPrefix = (id: string) => `books/${id}/_staged/`;
+const stagedKey = (id: string, offset: number) => `${stagedPrefix(id)}${String(offset).padStart(12, "0")}.bin`;
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -43,74 +45,93 @@ interface ContentWriterState {
   partNumber: number;
   offset: number;
   parts: R2UploadedPart[];
-  pendingBytes: Uint8Array | null;
 }
 
-// Accumulates chapter byte-blocks and writes them to one contiguous R2
-// object without ever holding the whole book in memory at once. R2 requires
-// every multipart part except the last to be exactly the same size (not
-// merely "at least 5MiB"), so once buffered data reaches PART_SIZE_BYTES we
-// slice off exactly that many bytes as a part and keep any overflow for the
-// next one. Small books that never reach the threshold fall back to a
-// single put() so the common case doesn't pay for multipart overhead.
+// Merges a set of R2 objects (already fetched) into one contiguous buffer,
+// in the given order.
+async function fetchAndMerge(env: Env, keys: string[], totalLen: number): Promise<Uint8Array> {
+  const merged = new Uint8Array(totalLen);
+  let pos = 0;
+  for (const key of keys) {
+    const obj = await env.BOOKS.get(key);
+    if (!obj) continue;
+    const bytes = new Uint8Array(await obj.arrayBuffer());
+    merged.set(bytes, pos);
+    pos += bytes.length;
+  }
+  return merged;
+}
+
+// Accumulates chapter byte-blocks into one contiguous R2 object without
+// ever holding more than one request's worth of new bytes in memory — and
+// without re-reading previously-staged bytes on every request either.
 //
-// An instance lives only for one HTTP request (one ingest-chunk call), so
-// its constructor accepts a snapshot of state from the previous request and
-// snapshot() hands back new state for the caller to persist (D1 columns +
-// an R2 scratch object for the not-yet-part-sized leftover bytes) — that's
-// what lets ingestion resume across requests instead of needing to fit a
-// whole book's CPU cost into one.
+// stage() writes only its own new bytes as a small standalone R2 object,
+// keyed by its absolute offset so objects sort in content order — cheap and
+// constant-cost no matter how much has accumulated so far. Only once staged
+// objects add up to a full multipart part (PART_SIZE_BYTES, which R2
+// requires every part except the last to match exactly) does
+// maybeConsolidate() do the heavier work of reading them back, cutting an
+// exact-size part, uploading it, and deleting the consumed staged objects —
+// and that happens only once per PART_SIZE_BYTES of content, not on every
+// request. (An earlier version re-read and re-wrote the whole growing
+// leftover on every single request, which is what made ingestion get
+// slower — and eventually blow the CPU budget — the further into a book it
+// got.)
+//
+// An instance lives only for one HTTP request; its constructor takes a
+// snapshot of state from the previous request (persisted in D1 by the
+// caller) and snapshot() hands back new state to persist for the next one.
 class ContentWriter {
   private multipart: R2MultipartUpload | null;
   private parts: R2UploadedPart[];
   private partNumber: number;
-  private pending: Uint8Array[];
-  private pendingLen: number;
   private offset: number;
 
-  constructor(private env: Env, private key: string, state: ContentWriterState) {
+  constructor(private env: Env, private bookId: string, private key: string, state: ContentWriterState) {
     this.multipart = state.uploadId ? env.BOOKS.resumeMultipartUpload(key, state.uploadId) : null;
     this.parts = [...state.parts];
     this.partNumber = state.partNumber;
     this.offset = state.offset;
-    this.pending = state.pendingBytes && state.pendingBytes.length ? [state.pendingBytes] : [];
-    this.pendingLen = state.pendingBytes?.length ?? 0;
   }
 
-  // Records `bytes` at the next offset and returns its {offset, length}.
-  async append(bytes: Uint8Array): Promise<{ offset: number; length: number }> {
-    const offset = this.offset;
-    this.pending.push(bytes);
-    this.pendingLen += bytes.length;
+  // The absolute offset the next staged byte will occupy.
+  get currentOffset(): number {
+    return this.offset;
+  }
+
+  // Stages this request's whole chunk (already concatenated by the caller)
+  // as one small R2 object and advances the running offset.
+  async stage(bytes: Uint8Array): Promise<void> {
+    if (bytes.length === 0) return;
+    await this.env.BOOKS.put(stagedKey(this.bookId, this.offset), bytes);
     this.offset += bytes.length;
-    while (this.pendingLen >= PART_SIZE_BYTES) await this.flushPart(PART_SIZE_BYTES);
-    return { offset, length: bytes.length };
   }
 
-  // Merges buffered chunks into one contiguous view (copying only when more
-  // than one chunk is pending). Non-destructive — safe to call more than once.
-  private mergePending(): Uint8Array {
-    if (this.pending.length <= 1) return this.pending[0] ?? new Uint8Array(0);
-    const out = new Uint8Array(this.pendingLen);
-    let pos = 0;
-    for (const chunk of this.pending) { out.set(chunk, pos); pos += chunk.length; }
-    return out;
-  }
+  // Cuts as many exact-size real parts as currently-staged bytes allow.
+  async maybeConsolidate(): Promise<void> {
+    let stagedTotal = this.offset - (this.partNumber - 1) * PART_SIZE_BYTES;
+    while (stagedTotal >= PART_SIZE_BYTES) {
+      const { objects } = await this.env.BOOKS.list({ prefix: stagedPrefix(this.bookId) });
+      objects.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+      const total = objects.reduce((s, o) => s + o.size, 0);
+      const keys = objects.map((o) => o.key);
+      const merged = await fetchAndMerge(this.env, keys, total);
+      const startOffset = this.offset - total;
 
-  // Uploads exactly `size` bytes as one part, keeping any overflow buffered.
-  private async flushPart(size: number): Promise<void> {
-    if (!this.multipart) {
-      this.multipart = await this.env.BOOKS.createMultipartUpload(this.key, {
-        httpMetadata: { contentType: "application/octet-stream" },
-      });
+      if (!this.multipart) {
+        this.multipart = await this.env.BOOKS.createMultipartUpload(this.key, {
+          httpMetadata: { contentType: "application/octet-stream" },
+        });
+      }
+      const part = await this.multipart.uploadPart(this.partNumber++, merged.subarray(0, PART_SIZE_BYTES));
+      this.parts.push(part);
+      await this.env.BOOKS.delete(keys);
+
+      const rest = merged.subarray(PART_SIZE_BYTES);
+      if (rest.length > 0) await this.env.BOOKS.put(stagedKey(this.bookId, startOffset + PART_SIZE_BYTES), rest);
+      stagedTotal -= PART_SIZE_BYTES;
     }
-    const merged = this.mergePending();
-    const chunk = merged.subarray(0, size);
-    const rest = merged.subarray(size);
-    this.pending = rest.length ? [rest] : [];
-    this.pendingLen = rest.length;
-    const part = await this.multipart.uploadPart(this.partNumber++, chunk);
-    this.parts.push(part);
   }
 
   // Snapshot of resumable state for the caller to persist between requests.
@@ -120,24 +141,29 @@ class ContentWriter {
       partNumber: this.partNumber,
       offset: this.offset,
       parts: this.parts,
-      pendingBytes: this.mergePending(),
     };
   }
 
-  // Completes the object: the true final part (which may be smaller than
-  // PART_SIZE_BYTES — only the very last part is allowed to differ in size).
+  // Completes the object: whatever remains staged becomes the true final
+  // part (allowed to be smaller than PART_SIZE_BYTES — only the last part
+  // may differ in size).
   async finish(): Promise<void> {
+    const { objects } = await this.env.BOOKS.list({ prefix: stagedPrefix(this.bookId) });
+    objects.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+    const total = objects.reduce((s, o) => s + o.size, 0);
+    const keys = objects.map((o) => o.key);
+    const merged = await fetchAndMerge(this.env, keys, total);
+
     if (!this.multipart) {
-      await this.env.BOOKS.put(this.key, this.mergePending(), {
-        httpMetadata: { contentType: "application/octet-stream" },
-      });
-      return;
+      await this.env.BOOKS.put(this.key, merged, { httpMetadata: { contentType: "application/octet-stream" } });
+    } else {
+      if (merged.length > 0) {
+        const part = await this.multipart.uploadPart(this.partNumber++, merged);
+        this.parts.push(part);
+      }
+      await this.multipart.complete(this.parts);
     }
-    if (this.pendingLen > 0) {
-      const part = await this.multipart.uploadPart(this.partNumber++, this.mergePending());
-      this.parts.push(part);
-    }
-    await this.multipart.complete(this.parts);
+    if (keys.length) await this.env.BOOKS.delete(keys);
   }
 
   async abort(): Promise<void> {
@@ -180,14 +206,17 @@ interface BookIngestRow {
   ingest_parts_json: string;
 }
 
-// Aborts a book's in-progress multipart upload (if any) and clears its
-// scratch pending object. Used before re-indexing and before deleting a book
-// that was left mid-ingest.
+// Aborts a book's in-progress multipart upload (if any) and clears any
+// staged-but-not-yet-consolidated objects. Used before re-indexing and
+// before deleting a book that was left mid-ingest.
 async function abortIngest(env: Env, id: string, uploadId: string | null): Promise<void> {
   if (uploadId) {
     try { await env.BOOKS.resumeMultipartUpload(contentBinKey(id), uploadId).abort(); } catch {}
   }
-  await env.BOOKS.delete(pendingKey(id)).catch(() => {});
+  try {
+    const { objects } = await env.BOOKS.list({ prefix: stagedPrefix(id) });
+    if (objects.length) await env.BOOKS.delete(objects.map((o) => o.key));
+  } catch {}
 }
 
 // The spine list + TOC titles never change for a given raw .epub, but
@@ -333,44 +362,51 @@ app.post("/api/books/:id/ingest-chunk", async (c) => {
   const slice: SpineItem[] = spine.slice(nextIdx, nextIdx + CHUNK_SIZE);
   const isLast = nextIdx + slice.length >= spine.length;
 
-  const pendingObj = await c.env.BOOKS.get(pendingKey(id));
-  const pendingBytes = pendingObj ? new Uint8Array(await pendingObj.arrayBuffer()) : null;
-
-  const content = new ContentWriter(c.env, contentBinKey(id), {
+  const content = new ContentWriter(c.env, id, contentBinKey(id), {
     uploadId: book.ingest_upload_id,
     partNumber: book.ingest_part_number,
     offset: book.ingest_offset,
     parts: JSON.parse(book.ingest_parts_json || "[]"),
-    pendingBytes,
   });
   const metaWriter = new MetaWriter(c.env, id);
   const enc = new TextEncoder();
 
   try {
     const chapters = extractChapterRange(bytes, slice, tocMap);
-    for (const chapter of chapters) {
-      const encoded = enc.encode(JSON.stringify(chapter.blocks));
-      const { offset, length } = await content.append(encoded);
+
+    // Encode every chapter in this chunk first, then stage them as one
+    // combined R2 object — a single write, not one per chapter.
+    const encoded = chapters.map((chapter) => ({
+      chapter,
+      bytes: enc.encode(JSON.stringify(chapter.blocks)),
+    }));
+    const combinedLen = encoded.reduce((s, e) => s + e.bytes.length, 0);
+    const combined = new Uint8Array(combinedLen);
+    let pos = 0;
+    const chunkStartOffset = content.currentOffset;
+    for (const { chapter, bytes: chBytes } of encoded) {
       await metaWriter.add({
         idx: chapter.order,
         title: chapter.title,
         file_name: fakeFileName(chapter.order),
         char_count: chapter.blocks.reduce((s, b) => s + b.text.length, 0),
-        offset,
-        length,
+        offset: chunkStartOffset + pos,
+        length: chBytes.length,
       });
+      combined.set(chBytes, pos);
+      pos += chBytes.length;
     }
+    await content.stage(combined);
     await metaWriter.flush();
+    await content.maybeConsolidate();
 
     if (isLast) {
       await content.finish();
-      await c.env.BOOKS.delete(pendingKey(id)).catch(() => {});
       await c.env.DB.prepare(`UPDATE books SET ingest_done = 1 WHERE id = ?`).bind(id).run();
       return c.json({ done: true, processed: spine.length, total: spine.length });
     }
 
     const snap = content.snapshot();
-    await c.env.BOOKS.put(pendingKey(id), snap.pendingBytes);
     await c.env.DB.prepare(
       `UPDATE books SET ingest_upload_id = ?, ingest_part_number = ?, ingest_offset = ?, ingest_parts_json = ?
        WHERE id = ?`,
