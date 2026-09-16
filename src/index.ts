@@ -11,17 +11,19 @@ const META_PER_BATCH = 150; // chapter-metadata inserts per D1 batch
 // R2 multipart parts must all be the exact same size except the last, and
 // >= 5MiB; 8MiB gives headroom above that minimum.
 const PART_SIZE_BYTES = 8 * 1024 * 1024;
-// Chapters processed per /ingest-chunk call. Cloudflare's Free plan kills a
-// request around ~2s of CPU time; extracting+encoding a chapter costs well
-// under 1ms, so this leaves a wide safety margin while still finishing a
-// multi-thousand-chapter book in a handful of requests.
-const CHUNK_SIZE = 300;
+// Chapters processed per /ingest-chunk call. Kept small: Cloudflare's Free
+// plan CPU budget per request has proven inconsistent in practice (one
+// request ran 2s of CPU before being killed, another was killed at 51ms) —
+// so this stays conservative rather than tuned to a number that isn't
+// actually reliable.
+const CHUNK_SIZE = 30;
 
 const app = new Hono<{ Bindings: Env }>();
 
 const contentBinKey = (id: string) => `books/${id}/content.bin`;
 const legacyContentKey = (id: string) => `books/${id}/content.json`;
 const pendingKey = (id: string) => `books/${id}/_pending.bin`;
+const spineMetaKey = (id: string) => `books/${id}/_spine.json`;
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -188,6 +190,31 @@ async function abortIngest(env: Env, id: string, uploadId: string | null): Promi
   await env.BOOKS.delete(pendingKey(id)).catch(() => {});
 }
 
+// The spine list + TOC titles never change for a given raw .epub, but
+// re-deriving them means re-scanning the archive's central directory —
+// cheap once, but wasteful when repeated on every single ingest-chunk call.
+// Cache the result in R2 after the first computation (at upload, or lazily
+// here for a book reindexed before this cache existed) so every chunk after
+// the first skips straight to extracting its own slice of chapters.
+async function loadSpineMeta(
+  env: Env,
+  id: string,
+  rawBytes: Uint8Array,
+): Promise<{ spine: SpineItem[]; tocMap: Map<string, string> }> {
+  const cached = await env.BOOKS.get(spineMetaKey(id));
+  if (cached) {
+    const parsed = JSON.parse(await cached.text()) as { spine: SpineItem[]; toc: [string, string][] };
+    return { spine: parsed.spine, tocMap: new Map(parsed.toc) };
+  }
+  const meta = parseEpubMeta(rawBytes);
+  await env.BOOKS.put(
+    spineMetaKey(id),
+    JSON.stringify({ spine: meta.spine, toc: [...meta.tocMap.entries()] }),
+    { httpMetadata: { contentType: "application/json" } },
+  );
+  return { spine: meta.spine, tocMap: meta.tocMap };
+}
+
 // --- Auth gate for all API routes except login/logout ------------------------
 app.use("/api/*", async (c, next) => {
   const path = new URL(c.req.url).pathname;
@@ -252,6 +279,11 @@ app.post("/api/books", async (c) => {
     rawKey = `raw/${id}.epub`;
     const codeName = fakeCodeName(meta.title);
     await c.env.BOOKS.put(rawKey, bytes, { httpMetadata: { contentType: "application/epub+zip" } });
+    await c.env.BOOKS.put(
+      spineMetaKey(id),
+      JSON.stringify({ spine: meta.spine, toc: [...meta.tocMap.entries()] }),
+      { httpMetadata: { contentType: "application/json" } },
+    );
     await c.env.DB.prepare(
       `INSERT INTO books (id, title, author, language, r2_key, code_name, chapter_count, created_at, ingest_done)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
@@ -265,7 +297,7 @@ app.post("/api/books", async (c) => {
           c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
           c.env.DB.prepare(`DELETE FROM books WHERE id = ?`).bind(id),
         ]);
-        await c.env.BOOKS.delete([contentBinKey(id), ...(rawKey ? [rawKey] : [])]);
+        await c.env.BOOKS.delete([contentBinKey(id), spineMetaKey(id), ...(rawKey ? [rawKey] : [])]);
       } catch {}
     }
     console.error("upload error", err);
@@ -290,16 +322,16 @@ app.post("/api/books/:id/ingest-chunk", async (c) => {
   if (!obj) return c.json({ error: "raw epub missing" }, 404);
   const bytes = new Uint8Array(await obj.arrayBuffer());
 
-  let meta;
-  try { meta = parseEpubMeta(bytes); }
+  let spine: SpineItem[], tocMap: Map<string, string>;
+  try { ({ spine, tocMap } = await loadSpineMeta(c.env, id, bytes)); }
   catch (err) { return c.json({ error: "parse failed: " + errMsg(err) }, 422); }
 
   const nextRow = await c.env.DB.prepare(
     `SELECT COALESCE(MAX(idx) + 1, 0) AS n FROM chapters WHERE book_id = ?`,
   ).bind(id).first<{ n: number }>();
   const nextIdx = nextRow?.n ?? 0;
-  const slice: SpineItem[] = meta.spine.slice(nextIdx, nextIdx + CHUNK_SIZE);
-  const isLast = nextIdx + slice.length >= meta.spine.length;
+  const slice: SpineItem[] = spine.slice(nextIdx, nextIdx + CHUNK_SIZE);
+  const isLast = nextIdx + slice.length >= spine.length;
 
   const pendingObj = await c.env.BOOKS.get(pendingKey(id));
   const pendingBytes = pendingObj ? new Uint8Array(await pendingObj.arrayBuffer()) : null;
@@ -315,7 +347,7 @@ app.post("/api/books/:id/ingest-chunk", async (c) => {
   const enc = new TextEncoder();
 
   try {
-    const chapters = extractChapterRange(bytes, slice, meta.tocMap);
+    const chapters = extractChapterRange(bytes, slice, tocMap);
     for (const chapter of chapters) {
       const encoded = enc.encode(JSON.stringify(chapter.blocks));
       const { offset, length } = await content.append(encoded);
@@ -334,7 +366,7 @@ app.post("/api/books/:id/ingest-chunk", async (c) => {
       await content.finish();
       await c.env.BOOKS.delete(pendingKey(id)).catch(() => {});
       await c.env.DB.prepare(`UPDATE books SET ingest_done = 1 WHERE id = ?`).bind(id).run();
-      return c.json({ done: true, processed: meta.spine.length, total: meta.spine.length });
+      return c.json({ done: true, processed: spine.length, total: spine.length });
     }
 
     const snap = content.snapshot();
@@ -344,7 +376,7 @@ app.post("/api/books/:id/ingest-chunk", async (c) => {
        WHERE id = ?`,
     ).bind(snap.uploadId, snap.partNumber, snap.offset, JSON.stringify(snap.parts), id).run();
 
-    return c.json({ done: false, processed: nextIdx + slice.length, total: meta.spine.length });
+    return c.json({ done: false, processed: nextIdx + slice.length, total: spine.length });
   } catch (err) {
     await content.abort();
     console.error("ingest-chunk error", err);
@@ -359,7 +391,7 @@ app.delete("/api/books/:id", async (c) => {
   if (!book) return c.json({ error: "not found" }, 404);
 
   if (!book.ingest_done) await abortIngest(c.env, id, book.ingest_upload_id);
-  await c.env.BOOKS.delete([book.r2_key, contentBinKey(id), legacyContentKey(id)]);
+  await c.env.BOOKS.delete([book.r2_key, contentBinKey(id), legacyContentKey(id), spineMetaKey(id)]);
   await c.env.DB.batch([
     c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
     c.env.DB.prepare(`DELETE FROM progress WHERE book_id = ?`).bind(id),

@@ -727,12 +727,21 @@ dropzone.addEventListener("drop", (e) => { const f = e.dataTransfer.files[0]; if
 // Drives a book's chunked ingestion (see /api/books/:id/ingest-chunk) to
 // completion — each call processes a bounded slice of chapters server-side,
 // so a book with thousands of chapters can't blow a single request's CPU
-// budget. onProgress(processed, total) fires after every chunk.
+// budget. onProgress(processed, total) fires after every chunk. The
+// server-side CPU budget has proven inconsistent in practice, so a failed
+// chunk is retried a few times (it's idempotent — it always resumes from
+// however many chapters are already durably stored) before giving up.
 async function ingestChapters(bookId, onProgress) {
+  const MAX_RETRIES = 4;
+  let retries = 0;
   for (;;) {
     const res = await api(`/api/books/${bookId}/ingest-chunk`, { method: "POST" });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) return { ok: false, error: data.error || `HTTP ${res.status}` };
+    if (!res.ok) {
+      if (retries++ < MAX_RETRIES) continue;
+      return { ok: false, error: data.error || `HTTP ${res.status}` };
+    }
+    retries = 0;
     if (onProgress) onProgress(data.processed || 0, data.total || 0);
     if (data.done) return { ok: true, total: data.total || 0 };
   }
