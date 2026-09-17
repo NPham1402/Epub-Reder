@@ -878,9 +878,9 @@ function stopMoveKeys() {
   moveKeys.s = false;
 }
 document.addEventListener("keydown", (e) => {
-  // Focus mode (boss key): "\" opens it, Esc closes it.
+  // Focus mode (boss key): "\" toggles it open/closed, Esc also closes it.
   if (panicVisible) {
-    if (e.key === "Escape") setPanic(false);
+    if (e.key === "Escape" || e.key === "\\") setPanic(false);
     e.preventDefault();
     return;
   }
