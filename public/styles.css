@@ -314,6 +314,11 @@ kbd {
 .setting-row { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-bottom: 1px solid var(--panel-border); font-size: 13px; }
 .setting-row small { color: var(--fg-muted); }
 .setting-row code { font-family: var(--font-mono); color: var(--tok-string); }
+.setting-input {
+  margin-left: auto; flex: 0 0 120px; padding: 5px 8px; background: #3c3c3c; border: 1px solid #3c3c3c;
+  border-radius: 3px; color: var(--fg); font-family: var(--font-mono); font-size: 12px;
+}
+.setting-input:focus { outline: 1px solid var(--focus-border); outline-offset: -1px; border-color: var(--focus-border); }
 .stepper { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 .stepper button { background: #3c3c3c; border: 1px solid var(--widget-border); color: var(--fg); border-radius: 3px; padding: 2px 8px; cursor: pointer; }
 .stepper button:hover { background: #4a4a4a; }

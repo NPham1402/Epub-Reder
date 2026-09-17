@@ -20,6 +20,7 @@ function injectIcons(root = document) {
 }
 
 /* ============================ State ======================================== */
+const DEFAULT_PANIC_CODE = "unlock";
 const state = {
   books: [],
   expanded: new Set(),
@@ -140,6 +141,7 @@ function loadSettings() {
     readFocus: s.readFocus !== false,
     fontSize: s.fontSize || 15,
     readWidth: s.readWidth || 82,
+    panicCode: (s.panicCode || DEFAULT_PANIC_CODE).toLowerCase(),
   };
 }
 function saveSettings() { localStorage.setItem("devdocs.settings", JSON.stringify(state.settings)); }
@@ -784,6 +786,7 @@ function openSettings() {
   $("#opt-camo").checked = state.settings.camo;
   $("#opt-serif").checked = state.settings.serif;
   $("#opt-focus").checked = state.settings.readFocus;
+  $("#opt-panic-code").value = state.settings.panicCode;
   $("#font-val").textContent = state.settings.fontSize;
   $("#width-val").textContent = state.settings.readWidth;
   $("#settings").hidden = false;
@@ -791,6 +794,12 @@ function openSettings() {
 $("#btn-settings").addEventListener("click", openSettings);
 $("#btn-account").addEventListener("click", openSettings);
 $("#opt-blur").addEventListener("change", (e) => { state.settings.blurHide = e.target.checked; saveSettings(); });
+$("#opt-panic-code").addEventListener("change", (e) => {
+  const v = e.target.value.trim().toLowerCase();
+  state.settings.panicCode = v || DEFAULT_PANIC_CODE;
+  e.target.value = state.settings.panicCode;
+  saveSettings();
+});
 $("#opt-camo").addEventListener("change", (e) => { state.settings.camo = e.target.checked; saveSettings(); rerender(); });
 $("#opt-serif").addEventListener("change", (e) => { state.settings.serif = e.target.checked; saveSettings(); rerender(); });
 $("#opt-focus").addEventListener("change", (e) => {
@@ -842,7 +851,13 @@ $("#btn-reveal").addEventListener("click", toggleReveal);
 function toggleSidebar() { $("#sidebar").classList.toggle("hidden"); requestAnimationFrame(drawMinimap); }
 
 let panicVisible = false;
-function setPanic(on) { panicVisible = on; $("#panic").hidden = !on; if (on) renderPanic(); }
+let panicBuffer = "";
+function setPanic(on) {
+  panicVisible = on;
+  panicBuffer = "";
+  $("#panic").hidden = !on;
+  if (on) renderPanic();
+}
 function anyModalOpen() { return ["upload", "settings", "login"].some((id) => !$("#" + id).hidden); }
 function renderPanic() {
   $("#panic-code").innerHTML = PANIC_CODE;
@@ -878,10 +893,17 @@ function stopMoveKeys() {
   moveKeys.s = false;
 }
 document.addEventListener("keydown", (e) => {
-  // Focus mode (boss key): "\" toggles it open/closed, Esc also closes it.
+  // Focus mode (boss key): "\" opens it. Once shown, no single key (not
+  // even Esc) dismisses it — someone mashing or trying keys in sequence to
+  // get past the cover screen shouldn't stumble onto the way out. Only
+  // typing the configured unlock phrase (Settings) closes it.
   if (panicVisible) {
-    if (e.key === "Escape" || e.key === "\\") setPanic(false);
     e.preventDefault();
+    if (e.key.length === 1) {
+      panicBuffer = (panicBuffer + e.key).toLowerCase().slice(-32);
+      const code = state.settings.panicCode || DEFAULT_PANIC_CODE;
+      if (panicBuffer.endsWith(code)) setPanic(false);
+    }
     return;
   }
   if (e.key === "\\") {

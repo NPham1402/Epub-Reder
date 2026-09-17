@@ -78,7 +78,7 @@
                   <div><kbd>Alt</kbd><kbd>1…9</kbd><span>Switch tab</span></div>
                   <div><kbd>←</kbd><kbd>→</kbd> or <kbd>A</kbd><kbd>D</kbd><span>Navigate chapters</span></div>
                   <div><kbd>W</kbd><kbd>S</kbd><span>Scroll up / down</span></div>
-                  <div><kbd>\</kbd><kbd>Esc</kbd><span>Focus mode: open / close</span></div>
+                  <div><kbd>\</kbd><span>Focus mode: open (type unlock phrase in Settings to close)</span></div>
                 </div>
               </div>
               <div class="code" id="code" hidden></div>
@@ -152,6 +152,10 @@
         <label class="setting-row">
           <input type="checkbox" id="opt-blur" />
           <span>Focus mode when window loses focus <small>(auto-hide reading)</small></span>
+        </label>
+        <label class="setting-row">
+          <span>Boss-key unlock phrase <small>(type this while the cover screen shows to dismiss it — resists random key-mashing)</small></span>
+          <input type="text" id="opt-panic-code" class="setting-input" autocomplete="off" spellcheck="false" />
         </label>
         <label class="setting-row">
           <input type="checkbox" id="opt-camo" />
