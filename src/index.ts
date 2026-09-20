@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { Env } from "./types";
 import { parseEpubMeta, extractChapterRange, type SpineItem } from "./epub";
@@ -29,6 +29,17 @@ const stagedKey = (id: string, offset: number) => `${stagedPrefix(id)}${String(o
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// Whether the session cookie should carry the Secure flag. A browser drops a
+// Secure cookie set over plain HTTP, so it must follow how the user actually
+// reaches the app — including behind a TLS-terminating proxy or tunnel,
+// which is why X-Forwarded-Proto counts. COOKIE_SECURE forces either way.
+function cookieSecure(c: Context<{ Bindings: Env }>): boolean {
+  if (c.env.COOKIE_SECURE === "true") return true;
+  if (c.env.COOKIE_SECURE === "false") return false;
+  const proto = c.req.header("x-forwarded-proto")?.split(",")[0].trim() ?? new URL(c.req.url).protocol.replace(":", "");
+  return proto === "https";
 }
 
 interface ChapterMeta {
@@ -263,7 +274,7 @@ app.post("/api/auth", async (c) => {
   }
   const token = await signSession(c.env.SESSION_SECRET, SESSION_TTL_MS);
   setCookie(c, "session", token, {
-    httpOnly: true, secure: true, sameSite: "Lax", path: "/", maxAge: SESSION_TTL_MS / 1000,
+    httpOnly: true, secure: cookieSecure(c), sameSite: "Lax", path: "/", maxAge: SESSION_TTL_MS / 1000,
   });
   return c.json({ ok: true });
 });
@@ -359,7 +370,8 @@ app.post("/api/books/:id/ingest-chunk", async (c) => {
     `SELECT COALESCE(MAX(idx) + 1, 0) AS n FROM chapters WHERE book_id = ?`,
   ).bind(id).first<{ n: number }>();
   const nextIdx = nextRow?.n ?? 0;
-  const slice: SpineItem[] = spine.slice(nextIdx, nextIdx + CHUNK_SIZE);
+  const chunkSize = Math.min(2000, Math.max(1, Number(c.env.CHUNK_SIZE) || CHUNK_SIZE));
+  const slice: SpineItem[] = spine.slice(nextIdx, nextIdx + chunkSize);
   const isLast = nextIdx + slice.length >= spine.length;
 
   const content = new ContentWriter(c.env, id, contentBinKey(id), {
