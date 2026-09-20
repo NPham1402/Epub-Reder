@@ -9,7 +9,7 @@ spec:
   # CHANGE ME to the hostname you want. Also add it as a "Published
   # application route" on the k3s-cluster Cloudflare Tunnel
   # (-> http://traefik.kube-system.svc.cluster.local:80).
-  - host: reader.dophamnguyen.xyz
+  - host: vs.dophamnguyen.xyz
     http:
       paths:
       - path: /
