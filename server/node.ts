@@ -10,11 +10,14 @@
 //   MIGRATIONS_DIR  default ./migrations
 //   CHUNK_SIZE      chapters per ingest request (default 300 here)
 //   COOKIE_SECURE   "true" | "false"; default: detect from the request
+//   STALE_INGEST_HOURS  abandoned first-time uploads older than this are removed (default 24)
 //   APP_TITLE
 
 import { serve } from "@hono/node-server";
+import { statfsSync } from "node:fs";
 import { resolve } from "node:path";
 import app from "../src/index";
+import { cleanupStaleIngests } from "../src/maintenance";
 import type { Env } from "../src/types";
 import { SqliteD1 } from "./d1-sqlite";
 import { FsR2 } from "./r2-fs";
@@ -51,7 +54,39 @@ const env = {
   APP_TITLE: process.env.APP_TITLE ?? "Internal Developer Docs",
   CHUNK_SIZE: process.env.CHUNK_SIZE ?? "300",
   COOKIE_SECURE: process.env.COOKIE_SECURE,
+  HEALTH_EXTRA: () => {
+    const s = statfsSync(dataDir);
+    const freePct = Math.round((Number(s.bavail) / Number(s.blocks)) * 1000) / 10;
+    return { disk: { free_mb: Math.floor((Number(s.bavail) * Number(s.bsize)) / 1048576), free_pct: freePct } };
+  },
 } as unknown as Env;
+
+// Disk fills by ~80 MB per large book with nothing else watching this
+// volume's headroom, so say so in the logs (shipped by Fluent Bit) before
+// writes start failing.
+function warnIfDiskLow() {
+  try {
+    const s = statfsSync(dataDir);
+    const freePct = (Number(s.bavail) / Number(s.blocks)) * 100;
+    if (freePct < 10) console.warn(`LOW DISK: only ${freePct.toFixed(1)}% free on ${dataDir}`);
+  } catch {}
+}
+
+const staleHours = Number(process.env.STALE_INGEST_HOURS ?? 24);
+
+// Unfinished first-time uploads are invisible in the library, so nothing else
+// would ever clean them up.
+async function runMaintenance() {
+  try {
+    const removed = await cleanupStaleIngests(env, staleHours * 3_600_000);
+    if (removed.length) console.log(`removed ${removed.length} abandoned upload(s)`);
+  } catch (err) {
+    console.error("maintenance failed", err);
+  }
+  warnIfDiskLow();
+}
+setTimeout(runMaintenance, Number(process.env.MAINTENANCE_FIRST_RUN_MS ?? 30_000)).unref();
+setInterval(runMaintenance, 6 * 60 * 60 * 1000).unref();
 
 const server = serve(
   {

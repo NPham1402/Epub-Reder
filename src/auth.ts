@@ -1,5 +1,8 @@
-// Minimal stateless session: an HMAC-signed token stored in an httpOnly cookie.
-// Token format: `v1.<expiryMs>.<base64url(hmac)>`.
+// Minimal session: an HMAC-signed token stored in an httpOnly cookie.
+// Token format: `v2.<expiryMs>.<epoch>.<base64url(hmac)>`. The signature
+// covers the epoch, and a token is only valid while its epoch equals the
+// server's current one — bumping the epoch ("sign out everywhere") revokes
+// every outstanding session without keeping a session table.
 
 const encoder = new TextEncoder();
 
@@ -22,31 +25,31 @@ async function hmac(secret: string, message: string): Promise<string> {
   return base64url(sig);
 }
 
-export async function signSession(secret: string, ttlMs: number): Promise<string> {
-  const payload = `v1.${Date.now() + ttlMs}`;
-  const sig = await hmac(secret, payload);
-  return `${payload}.${sig}`;
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
-export async function verifySession(token: string, secret: string): Promise<boolean> {
+export async function signSession(secret: string, ttlMs: number, epoch: number): Promise<string> {
+  const payload = `v2.${Date.now() + ttlMs}.${epoch}`;
+  return `${payload}.${await hmac(secret, payload)}`;
+}
+
+export async function verifySession(token: string, secret: string, epoch: number): Promise<boolean> {
   const parts = token.split(".");
-  if (parts.length !== 3) return false;
-  const [v, exp, sig] = parts;
-  if (v !== "v1") return false;
-  const expected = await hmac(secret, `${v}.${exp}`);
-  // Constant-time-ish compare.
-  if (sig.length !== expected.length) return false;
-  let diff = 0;
-  for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
-  if (diff !== 0) return false;
+  if (parts.length !== 4 || parts[0] !== "v2") return false;
+  const [v, exp, tokenEpoch, sig] = parts;
+  if (!constantTimeEqual(sig, await hmac(secret, `${v}.${exp}.${tokenEpoch}`))) return false;
+  if (Number(tokenEpoch) !== epoch) return false;
   return Number(exp) > Date.now();
 }
 
-// Timing-safe-ish passcode comparison.
-export function passcodeMatches(input: string, expected: string): boolean {
+// Compares HMACs of both values rather than the values themselves, so the
+// comparison time reveals neither the passcode's length nor a matching prefix.
+export async function passcodeMatches(input: string, expected: string, secret: string): Promise<boolean> {
   if (typeof input !== "string" || typeof expected !== "string") return false;
-  if (input.length !== expected.length) return false;
-  let diff = 0;
-  for (let i = 0; i < input.length; i++) diff |= input.charCodeAt(i) ^ expected.charCodeAt(i);
-  return diff === 0;
+  const [a, b] = await Promise.all([hmac(secret, "pw:" + input), hmac(secret, "pw:" + expected)]);
+  return constantTimeEqual(a, b);
 }

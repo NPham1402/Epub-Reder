@@ -1,9 +1,14 @@
 import { Hono, type Context } from "hono";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
+import { secureHeaders } from "hono/secure-headers";
 import type { Env } from "./types";
-import { parseEpubMeta, extractChapterRange, type SpineItem } from "./epub";
+import { parseEpubMeta, extractChapterRange, EpubLimitError, type SpineItem } from "./epub";
 import { fakeCodeName, fakeFileName } from "./names";
 import { passcodeMatches, signSession, verifySession } from "./auth";
+import { FailureLimiter } from "./ratelimit";
+import {
+  abortIngest, busyBooks, contentBinKey, legacyContentKey, spineMetaKey, stagedKey, stagedPrefix,
+} from "./storage";
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 const MAX_EPUB_BYTES = 80 * 1024 * 1024; // 80 MB guard
@@ -21,11 +26,31 @@ const CHUNK_SIZE = 30;
 
 const app = new Hono<{ Bindings: Env }>();
 
-const contentBinKey = (id: string) => `books/${id}/content.bin`;
-const legacyContentKey = (id: string) => `books/${id}/content.json`;
-const spineMetaKey = (id: string) => `books/${id}/_spine.json`;
-const stagedPrefix = (id: string) => `books/${id}/_staged/`;
-const stagedKey = (id: string, offset: number) => `${stagedPrefix(id)}${String(offset).padStart(12, "0")}.bin`;
+// Failed-login throttling: a few tries per client, plus a global ceiling so
+// spoofing the client address (or having many addresses) still can't turn the
+// passcode into an unlimited-guess oracle. The global cap means someone
+// hammering the login can lock the owner out too, for at most one window —
+// the accepted trade for a single-passcode app on the public internet.
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const loginPerClient = new FailureLimiter({ max: 5, windowMs: LOGIN_WINDOW_MS });
+const loginGlobal = new FailureLimiter({ max: 60, windowMs: LOGIN_WINDOW_MS });
+
+function clientKey(c: Context<{ Bindings: Env }>): string {
+  return c.req.header("cf-connecting-ip")
+    ?? c.req.header("x-forwarded-for")?.split(",")[0].trim()
+    ?? "unknown";
+}
+
+// Current session epoch; a missing table (migration not applied yet) must not
+// lock everyone out, so that case falls back to the initial value.
+async function sessionEpoch(env: Env): Promise<number> {
+  try {
+    const row = await env.DB.prepare(`SELECT value FROM app_state WHERE key = 'session_epoch'`).first<{ value: string }>();
+    return Number(row?.value) || 1;
+  } catch {
+    return 1;
+  }
+}
 
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -217,19 +242,6 @@ interface BookIngestRow {
   ingest_parts_json: string;
 }
 
-// Aborts a book's in-progress multipart upload (if any) and clears any
-// staged-but-not-yet-consolidated objects. Used before re-indexing and
-// before deleting a book that was left mid-ingest.
-async function abortIngest(env: Env, id: string, uploadId: string | null): Promise<void> {
-  if (uploadId) {
-    try { await env.BOOKS.resumeMultipartUpload(contentBinKey(id), uploadId).abort(); } catch {}
-  }
-  try {
-    const { objects } = await env.BOOKS.list({ prefix: stagedPrefix(id) });
-    if (objects.length) await env.BOOKS.delete(objects.map((o) => o.key));
-  } catch {}
-}
-
 // The spine list + TOC titles never change for a given raw .epub, but
 // re-deriving them means re-scanning the archive's central directory —
 // cheap once, but wasteful when repeated on every single ingest-chunk call.
@@ -255,12 +267,54 @@ async function loadSpineMeta(
   return { spine: meta.spine, tocMap: meta.tocMap };
 }
 
+// --- Response hardening ------------------------------------------------------
+// The UI is one same-origin script, one stylesheet and a data-URI icon font,
+// so the CSP can be strict: no inline script, no third-party origins, and it
+// can't be framed. (style-src keeps 'unsafe-inline' because the UI sets style
+// attributes and properties directly.)
+app.use("*", secureHeaders({
+  contentSecurityPolicy: {
+    defaultSrc: ["'self'"],
+    scriptSrc: ["'self'"],
+    styleSrc: ["'self'", "'unsafe-inline'"],
+    imgSrc: ["'self'", "data:"],
+    fontSrc: ["'self'", "data:"],
+    connectSrc: ["'self'"],
+    objectSrc: ["'none'"],
+    baseUri: ["'none'"],
+    formAction: ["'self'"],
+    frameAncestors: ["'none'"],
+  },
+  xFrameOptions: "DENY",
+  referrerPolicy: "no-referrer",
+  crossOriginOpenerPolicy: "same-origin",
+  strictTransportSecurity: "max-age=15552000",
+  permissionsPolicy: { camera: [], microphone: [], geolocation: [], payment: [] },
+}));
+
+// Book content and session state must never be stored by a shared cache.
+app.use("/api/*", async (c, next) => {
+  await next();
+  c.header("Cache-Control", "no-store");
+});
+
+// Liveness/readiness for orchestrators: proves the database answers, not just
+// that the process is up. Unauthenticated and reveals nothing.
+app.get("/healthz", async (c) => {
+  try {
+    await c.env.DB.prepare(`SELECT 1 AS ok`).first();
+    return c.json({ ok: true, ...(c.env.HEALTH_EXTRA ? await c.env.HEALTH_EXTRA() : {}) });
+  } catch {
+    return c.json({ ok: false }, 503);
+  }
+});
+
 // --- Auth gate for all API routes except login/logout ------------------------
 app.use("/api/*", async (c, next) => {
   const path = new URL(c.req.url).pathname;
   if (path === "/api/auth" || path === "/api/logout") return next();
   const token = getCookie(c, "session");
-  if (!token || !(await verifySession(token, c.env.SESSION_SECRET))) {
+  if (!token || !(await verifySession(token, c.env.SESSION_SECRET, await sessionEpoch(c.env)))) {
     return c.json({ error: "unauthorized" }, 401);
   }
   return next();
@@ -268,11 +322,21 @@ app.use("/api/*", async (c, next) => {
 
 // --- Auth --------------------------------------------------------------------
 app.post("/api/auth", async (c) => {
+  const client = clientKey(c);
+  const wait = Math.max(loginPerClient.retryAfter(client), loginGlobal.retryAfter("*"));
+  if (wait > 0) {
+    c.header("Retry-After", String(Math.ceil(wait / 1000)));
+    return c.json({ error: "too many attempts, try again later" }, 429);
+  }
+
   const body = (await c.req.json().catch(() => ({}))) as { passcode?: string };
-  if (!body.passcode || !passcodeMatches(body.passcode, c.env.ACCESS_PASSCODE)) {
+  if (!body.passcode || !(await passcodeMatches(body.passcode, c.env.ACCESS_PASSCODE, c.env.SESSION_SECRET))) {
+    loginPerClient.fail(client);
+    loginGlobal.fail("*");
     return c.json({ error: "invalid passcode" }, 401);
   }
-  const token = await signSession(c.env.SESSION_SECRET, SESSION_TTL_MS);
+  loginPerClient.reset(client);
+  const token = await signSession(c.env.SESSION_SECRET, SESSION_TTL_MS, await sessionEpoch(c.env));
   setCookie(c, "session", token, {
     httpOnly: true, secure: cookieSecure(c), sameSite: "Lax", path: "/", maxAge: SESSION_TTL_MS / 1000,
   });
@@ -284,13 +348,24 @@ app.post("/api/logout", (c) => {
   return c.json({ ok: true });
 });
 
+// Revokes every session, including this one and any stolen/forgotten copy.
+app.post("/api/logout-all", async (c) => {
+  await c.env.DB.prepare(
+    `UPDATE app_state SET value = CAST(value AS INTEGER) + 1 WHERE key = 'session_epoch'`,
+  ).run();
+  deleteCookie(c, "session", { path: "/" });
+  return c.json({ ok: true });
+});
+
 // --- Books list --------------------------------------------------------------
-// Only fully-ingested books are listed — a book mid-chunked-ingest has no
-// usable content yet, and its own upload/reindex flow tracks its progress.
+// Listed: finished books, and finished books currently being re-indexed (the
+// UI resumes those when opened). Not listed: uploads that never finished
+// their first ingest — they have no usable content, and the stale-ingest
+// cleanup removes them.
 app.get("/api/books", async (c) => {
   const { results } = await c.env.DB.prepare(
     `SELECT id, title, author, code_name, chapter_count, created_at
-     FROM books WHERE ingest_done = 1 ORDER BY created_at DESC`,
+     FROM books WHERE ingest_done = 1 OR ever_completed = 1 ORDER BY created_at DESC`,
   ).all();
   return c.json({ books: results });
 });
@@ -325,8 +400,8 @@ app.post("/api/books", async (c) => {
       { httpMetadata: { contentType: "application/json" } },
     );
     await c.env.DB.prepare(
-      `INSERT INTO books (id, title, author, language, r2_key, code_name, chapter_count, created_at, ingest_done)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
+      `INSERT INTO books (id, title, author, language, r2_key, code_name, chapter_count, created_at, ingest_done, ever_completed)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
     ).bind(id, meta.title, meta.author, meta.language, rawKey, codeName, meta.spine.length, Date.now()).run();
 
     return c.json({ id, title: meta.title, code_name: codeName, total: meta.spine.length });
@@ -351,6 +426,13 @@ app.post("/api/books", async (c) => {
 // chapters rather than corrupting anything. -----------------------------------
 app.post("/api/books/:id/ingest-chunk", async (c) => {
   const id = c.req.param("id");
+  if (busyBooks.has(id)) return c.json({ error: "another operation is running for this book" }, 409);
+  busyBooks.add(id);
+  try { return await ingestChunk(c, id); }
+  finally { busyBooks.delete(id); }
+});
+
+async function ingestChunk(c: Context<{ Bindings: Env }>, id: string): Promise<Response> {
   const book = await c.env.DB.prepare(
     `SELECT r2_key, chapter_count, ingest_done, ingest_upload_id, ingest_part_number, ingest_offset, ingest_parts_json
      FROM books WHERE id = ?`,
@@ -414,7 +496,7 @@ app.post("/api/books/:id/ingest-chunk", async (c) => {
 
     if (isLast) {
       await content.finish();
-      await c.env.DB.prepare(`UPDATE books SET ingest_done = 1 WHERE id = ?`).bind(id).run();
+      await c.env.DB.prepare(`UPDATE books SET ingest_done = 1, ever_completed = 1 WHERE id = ?`).bind(id).run();
       return c.json({ done: true, processed: spine.length, total: spine.length });
     }
 
@@ -428,31 +510,38 @@ app.post("/api/books/:id/ingest-chunk", async (c) => {
   } catch (err) {
     await content.abort();
     console.error("ingest-chunk error", err);
+    if (err instanceof EpubLimitError) return c.json({ error: errMsg(err) }, 422);
     return c.json({ error: "server error: " + errMsg(err) }, 500);
   }
-});
+}
 
 app.delete("/api/books/:id", async (c) => {
   const id = c.req.param("id");
-  const book = await c.env.DB.prepare(`SELECT r2_key, ingest_done, ingest_upload_id FROM books WHERE id = ?`)
-    .bind(id).first<{ r2_key: string; ingest_done: number; ingest_upload_id: string | null }>();
-  if (!book) return c.json({ error: "not found" }, 404);
+  if (busyBooks.has(id)) return c.json({ error: "another operation is running for this book" }, 409);
+  busyBooks.add(id);
+  try {
+    const book = await c.env.DB.prepare(`SELECT r2_key, ingest_done, ingest_upload_id FROM books WHERE id = ?`)
+      .bind(id).first<{ r2_key: string; ingest_done: number; ingest_upload_id: string | null }>();
+    if (!book) return c.json({ error: "not found" }, 404);
 
-  if (!book.ingest_done) await abortIngest(c.env, id, book.ingest_upload_id);
-  await c.env.BOOKS.delete([book.r2_key, contentBinKey(id), legacyContentKey(id), spineMetaKey(id)]);
-  await c.env.DB.batch([
-    c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
-    c.env.DB.prepare(`DELETE FROM progress WHERE book_id = ?`).bind(id),
-    c.env.DB.prepare(`DELETE FROM books WHERE id = ?`).bind(id),
-  ]);
-  return c.json({ ok: true });
+    if (!book.ingest_done) await abortIngest(c.env, id, book.ingest_upload_id);
+    await c.env.BOOKS.delete([book.r2_key, contentBinKey(id), legacyContentKey(id), spineMetaKey(id)]);
+    await c.env.DB.batch([
+      c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
+      c.env.DB.prepare(`DELETE FROM progress WHERE book_id = ?`).bind(id),
+      c.env.DB.prepare(`DELETE FROM books WHERE id = ?`).bind(id),
+    ]);
+    return c.json({ ok: true });
+  } finally {
+    busyBooks.delete(id);
+  }
 });
 
 // --- Chapter index (metadata only) -------------------------------------------
 app.get("/api/books/:id/index", async (c) => {
   const id = c.req.param("id");
   const book = await c.env.DB.prepare(
-    `SELECT id, title, author, code_name, chapter_count FROM books WHERE id = ?`,
+    `SELECT id, title, author, code_name, chapter_count, ingest_done FROM books WHERE id = ?`,
   ).bind(id).first();
   if (!book) return c.json({ error: "not found" }, 404);
 
@@ -470,6 +559,11 @@ app.get("/api/books/:id/index", async (c) => {
 app.get("/api/books/:id/chapters/:idx", async (c) => {
   const id = c.req.param("id");
   const idx = Number(c.req.param("idx"));
+  // While a book is (re-)indexing, its chapter rows point into a content file
+  // that is still being rewritten — serving them would return wrong text.
+  const state = await c.env.DB.prepare(`SELECT ingest_done FROM books WHERE id = ?`)
+    .bind(id).first<{ ingest_done: number }>();
+  if (state && !state.ingest_done) return c.json({ error: "book is being indexed" }, 409);
   const row = await c.env.DB.prepare(
     `SELECT idx, title, file_name, byte_offset, byte_length, blocks
      FROM chapters WHERE book_id = ? AND idx = ?`,
@@ -496,20 +590,26 @@ app.get("/api/books/:id/chapters/:idx", async (c) => {
 // client drives /ingest-chunk the same way it does for a fresh upload. -------
 app.post("/api/books/:id/reindex", async (c) => {
   const id = c.req.param("id");
-  const book = await c.env.DB.prepare(`SELECT id, ingest_upload_id FROM books WHERE id = ?`)
-    .bind(id).first<{ id: string; ingest_upload_id: string | null }>();
-  if (!book) return c.json({ error: "not found" }, 404);
+  if (busyBooks.has(id)) return c.json({ error: "another operation is running for this book" }, 409);
+  busyBooks.add(id);
+  try {
+    const book = await c.env.DB.prepare(`SELECT id, ingest_upload_id FROM books WHERE id = ?`)
+      .bind(id).first<{ id: string; ingest_upload_id: string | null }>();
+    if (!book) return c.json({ error: "not found" }, 404);
 
-  await abortIngest(c.env, id, book.ingest_upload_id);
-  await c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id).run();
-  await c.env.DB.prepare(
-    `UPDATE books SET ingest_done = 0, ingest_upload_id = NULL, ingest_part_number = 1,
-       ingest_offset = 0, ingest_parts_json = '[]'
-     WHERE id = ?`,
-  ).bind(id).run();
-  await c.env.BOOKS.delete(legacyContentKey(id));
+    await abortIngest(c.env, id, book.ingest_upload_id);
+    await c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id).run();
+    await c.env.DB.prepare(
+      `UPDATE books SET ingest_done = 0, ingest_upload_id = NULL, ingest_part_number = 1,
+         ingest_offset = 0, ingest_parts_json = '[]'
+       WHERE id = ?`,
+    ).bind(id).run();
+    await c.env.BOOKS.delete(legacyContentKey(id));
 
-  return c.json({ ok: true });
+    return c.json({ ok: true });
+  } finally {
+    busyBooks.delete(id);
+  }
 });
 
 // --- Progress ----------------------------------------------------------------
@@ -519,6 +619,8 @@ app.post("/api/books/:id/progress", async (c) => {
   const chapterIdx = Number.isFinite(body.chapter_idx) ? Math.floor(body.chapter_idx as number) : 0;
   const ratio = Number.isFinite(body.scroll_ratio) ? Math.min(1, Math.max(0, body.scroll_ratio as number)) : 0;
 
+  const exists = await c.env.DB.prepare(`SELECT 1 AS ok FROM books WHERE id = ?`).bind(id).first();
+  if (!exists) return c.json({ error: "not found" }, 404);
   await c.env.DB.prepare(
     `INSERT INTO progress (book_id, chapter_idx, scroll_ratio, updated_at)
      VALUES (?, ?, ?, ?)

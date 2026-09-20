@@ -182,6 +182,10 @@ $("#login-form").addEventListener("submit", async (e) => {
     $("#login-pass").value = "";
     boot();
   } else {
+    const wait = Number(res.headers.get("retry-after")) || 0;
+    $("#login-error").textContent = res.status === 429
+      ? `Too many attempts. Try again in ${Math.max(1, Math.ceil(wait / 60))} min.`
+      : "Invalid access key.";
     $("#login-error").hidden = false;
     $("#login-pass").select();
   }
@@ -233,7 +237,13 @@ async function loadBookIndex(book) {
   let res = await api(`/api/books/${book.id}/index`);
   if (!res.ok) return false;
   let data = await res.json();
-  if ((!data.chapters || !data.chapters.length) && data.chapter_count > 0) {
+  if (data.ingest_done === 0) {
+    // A re-index that was interrupted: pick it up where it stopped.
+    await ingestChapters(book.id).catch(() => {});
+    res = await api(`/api/books/${book.id}/index`);
+    if (!res.ok) return false;
+    data = await res.json();
+  } else if ((!data.chapters || !data.chapters.length) && data.chapter_count > 0) {
     // Old-format book (content stored as one blob) — re-index from its .epub.
     await api(`/api/books/${book.id}/reindex`, { method: "POST" }).catch(() => {});
     await ingestChapters(book.id).catch(() => {});
@@ -740,7 +750,8 @@ async function ingestChapters(bookId, onProgress) {
     const res = await api(`/api/books/${bookId}/ingest-chunk`, { method: "POST" });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      if (retries++ < MAX_RETRIES) continue;
+      // 409: another request (e.g. a second tab) is ingesting this same book.
+      if (retries++ < MAX_RETRIES) { await new Promise((r) => setTimeout(r, 400 * retries)); continue; }
       return { ok: false, error: data.error || `HTTP ${res.status}` };
     }
     retries = 0;
@@ -832,6 +843,11 @@ function applySettingsToDom() {
 }
 function rerender() { const ch = state.current && chapterOf(state.current.bookId, state.current.idx); if (ch) renderContent(ch); }
 $("#btn-logout").addEventListener("click", async () => { await api("/api/logout", { method: "POST" }); location.reload(); });
+$("#btn-logout-all").addEventListener("click", async () => {
+  if (!confirm("Sign out of every device, including this one?")) return;
+  await api("/api/logout-all", { method: "POST" });
+  location.reload();
+});
 
 document.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => ($("#" + b.dataset.close).hidden = true)));
 document.querySelectorAll(".modal-backdrop").forEach((bd) =>

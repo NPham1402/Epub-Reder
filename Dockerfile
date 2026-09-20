@@ -26,6 +26,8 @@ ENV NODE_ENV=production \
     CHUNK_SIZE=300
 WORKDIR /app
 COPY --from=build /app/dist/server.mjs ./server.mjs
+# Backup/restore tool, run by the cluster CronJob against the same volume.
+COPY --from=build /app/dist/backup.mjs ./backup.mjs
 COPY public ./public
 COPY migrations ./migrations
 # uid 1000 = the image's built-in `node` user (matches runAsUser in the k8s
@@ -35,5 +37,5 @@ USER node
 VOLUME /data
 EXPOSE 8787
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
-  CMD wget -q -O /dev/null http://127.0.0.1:${PORT}/ || exit 1
+  CMD wget -q -O /dev/null http://127.0.0.1:${PORT}/healthz || exit 1
 CMD ["node", "--disable-warning=ExperimentalWarning", "server.mjs"]

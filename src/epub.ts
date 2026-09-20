@@ -23,6 +23,26 @@ export interface ChapterRangeResult {
   blocks: TextBlock[];
 }
 
+// An EPUB is a zip, and zips can lie small and inflate huge ("zip bomb"). The
+// filters below see each entry's declared uncompressed size *before*
+// anything is inflated, so oversized entries are refused up front instead of
+// exhausting the process's memory. Real chapters are tens of KB; the largest
+// legitimate metadata file seen (the NCX of a 2953-chapter book) is ~3 MB.
+const MAX_META_ENTRY_BYTES = 16 * 1024 * 1024;
+const MAX_CHAPTER_ENTRY_BYTES = 32 * 1024 * 1024;
+const MAX_SLICE_BYTES = 256 * 1024 * 1024;
+
+export class EpubLimitError extends Error {}
+
+function within(entry: { name: string; originalSize: number }, max: number): boolean {
+  if (entry.originalSize > max) {
+    throw new EpubLimitError(
+      `EPUB entry "${entry.name}" is too large to process (${Math.round(entry.originalSize / 1048576)} MB uncompressed)`,
+    );
+  }
+  return true;
+}
+
 interface ManifestItem {
   href: string;
   mediaType: string;
@@ -187,7 +207,7 @@ function collectNav(html: string, navPath: string, map: Map<string, string>): vo
 export function parseEpubMeta(data: Uint8Array): ParsedEpubMeta {
   const xml = new XMLParser({ ignoreAttributes: false, attributeNamePrefix: "@_", trimValues: true });
 
-  const containerFiles = unzipSync(data, { filter: (f) => f.name === "META-INF/container.xml" });
+  const containerFiles = unzipSync(data, { filter: (f) => f.name === "META-INF/container.xml" && within(f, MAX_META_ENTRY_BYTES) });
   const containerRaw = containerFiles["META-INF/container.xml"];
   if (!containerRaw) throw new Error("Not a valid EPUB: missing META-INF/container.xml");
   const container = xml.parse(strFromU8(containerRaw));
@@ -196,7 +216,7 @@ export function parseEpubMeta(data: Uint8Array): ParsedEpubMeta {
   const opfPath: string | undefined = rootfile?.["@_full-path"];
   if (!opfPath) throw new Error("Not a valid EPUB: missing OPF package file");
 
-  const opfFiles = unzipSync(data, { filter: (f) => f.name === opfPath });
+  const opfFiles = unzipSync(data, { filter: (f) => f.name === opfPath && within(f, MAX_META_ENTRY_BYTES) });
   const opfRaw = opfFiles[opfPath];
   if (!opfRaw) throw new Error("Not a valid EPUB: missing OPF package file");
   const opf = xml.parse(strFromU8(opfRaw));
@@ -233,7 +253,7 @@ export function parseEpubMeta(data: Uint8Array): ParsedEpubMeta {
   if (navItem) auxHrefs.add(navItem.href);
   if (ncxItem) auxHrefs.add(ncxItem.href);
   if (auxHrefs.size > 0) {
-    const auxFiles = unzipSync(data, { filter: (f) => auxHrefs.has(f.name) });
+    const auxFiles = unzipSync(data, { filter: (f) => auxHrefs.has(f.name) && within(f, MAX_META_ENTRY_BYTES) });
     if (navItem && auxFiles[navItem.href]) collectNav(strFromU8(auxFiles[navItem.href]), navItem.href, tocMap);
     if (ncxItem && auxFiles[ncxItem.href]) {
       const ncx = xml.parse(strFromU8(auxFiles[ncxItem.href]));
@@ -268,7 +288,16 @@ export function extractChapterRange(
   tocMap: Map<string, string>,
 ): ChapterRangeResult[] {
   const hrefSet = new Set(items.map((i) => i.href));
-  const files = unzipSync(data, { filter: (f) => hrefSet.has(f.name) });
+  let sliceBytes = 0;
+  const files = unzipSync(data, {
+    filter: (f) => {
+      if (!hrefSet.has(f.name)) return false;
+      within(f, MAX_CHAPTER_ENTRY_BYTES);
+      sliceBytes += f.originalSize;
+      if (sliceBytes > MAX_SLICE_BYTES) throw new EpubLimitError("EPUB chapters in this batch are too large to process");
+      return true;
+    },
+  });
   const results: ChapterRangeResult[] = [];
   for (const item of items) {
     const raw = files[item.href];

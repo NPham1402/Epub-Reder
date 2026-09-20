@@ -6,14 +6,16 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.server.json",
     "build:check": "wrangler deploy --dry-run --outdir dist",
     "cf-typegen": "wrangler types",
     "db:migrate": "wrangler d1 migrations apply epub_reader_db --remote",
     "db:migrate:local": "wrangler d1 migrations apply epub_reader_db --local",
-    "build:server": "esbuild server/node.ts --bundle --platform=node --format=esm --target=node24 --external:node:sqlite --outfile=dist/server.mjs",
+    "build:server": "esbuild server/node.ts --bundle --platform=node --format=esm --target=node24 --external:node:sqlite --outfile=dist/server.mjs && esbuild server/backup.ts --bundle --platform=node --format=esm --target=node24 --external:node:sqlite --outfile=dist/backup.mjs",
     "start:server": "node --disable-warning=ExperimentalWarning dist/server.mjs",
-    "typecheck:server": "tsc --noEmit -p tsconfig.server.json"
+    "typecheck:server": "tsc --noEmit -p tsconfig.server.json",
+    "test": "npm run build:server && node --disable-warning=ExperimentalWarning --test \"tests/**/*.test.ts\"",
+    "test:unit": "node --disable-warning=ExperimentalWarning --test tests/unit.test.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.1",
