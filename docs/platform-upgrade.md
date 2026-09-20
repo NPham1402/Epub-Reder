@@ -1,6 +1,6 @@
 # Kế hoạch nâng cấp nền tảng — EPUB Reader
 
-> Ngày: 2026-09-20 · Trạng thái: **P0/P1/P2 phần code đã xong và có test; còn 4 việc cần chủ hệ thống làm (mục 9).**
+> Ngày: 2026-09-20 · Trạng thái: **10/16 mục backlog đã xong và có test; 3 mục cần chủ hệ thống (mục 9); 3 mục chưa làm (EPR-14, 15, 16).**
 >
 > Phương pháp lấy từ `Worker_Zalo/docs/platform-upgrade/` (baseline có bằng chứng → ưu tiên P0–P3 → quyết định cần chốt → lộ trình có cổng thoát → backlog có ID → chỉ số nghiệm thu → sổ rủi ro), thu nhỏ cho dự án một người: một file thay vì tám.
 
@@ -43,7 +43,7 @@ Trạng thái: ✅ xong + có test · ⏳ cần chủ hệ thống · 🔲 chưa
 |---|---|---|---|---|---|
 | EPR-01 | P0 | Giới hạn thử đăng nhập: 5 lần/15 phút/client + trần toàn cục 60 | S | ✅ | Lần 6 → 429 kể cả đúng mật khẩu; client khác không bị ảnh hưởng; trần toàn cục chặn được địa chỉ giả |
 | EPR-02 | P0 | Cloudflare Access trước `vs.dophamnguyen.xyz` | S | ⏳ | Trang đăng nhập không tải được khi chưa qua Access |
-| EPR-03 | P0 | Commit SealedSecret vào git | S | ⏳ | `apps/epub-reader/sealedsecret.yaml` có trong `ci-cd-platform` |
+| EPR-03 | P0 | Commit SealedSecret vào git | S | ✅ | `apps/epub-reader/sealedsecret.yaml` có trong `ci-cd-platform` (commit `4b74170`) |
 | EPR-04 | P1 | CronJob backup hằng đêm (snapshot SQLite `VACUUM INTO` + mirror `objects/`, giữ 14 bản) | M | ✅ | **Diễn tập khôi phục tự động**: backup → xoá sạch dữ liệu → restore → mọi chương khớp từng byte. **Đã chạy trên volume thật của cụm (2026-09-20):** backup 3 file/38 MB; khôi phục vào thư mục tạm: `integrity_check` ok, 1 sách/2389 chương/3 file, 4 giây |
 | EPR-05 | P1 | Backup **off-site** | M | ⏳ | Bản sao nằm ngoài node/đĩa đang chạy app và đã khôi phục thử từ đó |
 | EPR-06 | P1 | Test + cổng CI: typecheck + 25 test; đỏ thì không đẩy image | M | ✅ | PR/push chạy `npm test`; job build phụ thuộc job test |
@@ -64,7 +64,7 @@ Sửa kèm theo: ghi tiến độ đọc cho sách không tồn tại giờ tr�
 
 | Giai đoạn | Nội dung | Cổng thoát (đo được) | TT |
 |---|---|---|---|
-| 0 – 72 giờ | EPR-01, 02, 03 | Gõ sai 5 lần → 429; trang đăng nhập không mở được khi chưa qua Access; secret có trong git | 1/3 (còn 02, 03) |
+| 0 – 72 giờ | EPR-01, 02, 03 | Gõ sai 5 lần → 429; trang đăng nhập không mở được khi chưa qua Access; secret có trong git | 2/3 (còn 02) |
 | Tuần 1–2 | EPR-04…10 | Diễn tập khôi phục 0 chương lệch; CI đỏ thì không sinh image; bản mới tự lên cụm | backup + khôi phục đã chứng minh trên cụm thật; còn 05, 07 |
 | Tuần 3–4 | EPR-11…14 | 0 vi phạm CSP; backup off-site đã khôi phục thử; có cảnh báo đĩa | code xong; còn 14 |
 | Sau đó | EPR-15, 16 | Theo quyết định 1 và 2 | chưa bắt đầu |
@@ -101,9 +101,8 @@ Lưu ý: diễn tập trên cụm mới kiểm tra `integrity_check`, số sách
 ## 9. Việc cần chủ hệ thống làm
 
 1. **EPR-02** — Cloudflare Zero Trust → Access → Applications → thêm `vs.dophamnguyen.xyz`, policy cho email của bạn.
-2. **EPR-03** — chạy lệnh `kubeseal` trong `deploy/k8s/secret.example.yaml`, đưa `sealedsecret.yaml` vào `apps/epub-reader/`.
-3. **EPR-07** — tạo fine-grained PAT (Contents: read & write trên `Npham140201/ci-cd-platform`), lưu thành secret `CI_CD_PLATFORM_TOKEN` của repo EPUB Reader.
-4. **EPR-05** — chọn nơi đặt bản sao off-site (ví dụ kéo `/backup` sang node khác qua Tailscale bằng `rsync`, hoặc đẩy lên một bucket) rồi tôi viết bước đó.
+2. **EPR-07** — tạo fine-grained PAT (Contents: read & write trên `Npham140201/ci-cd-platform`), lưu thành secret `CI_CD_PLATFORM_TOKEN` của repo EPUB Reader.
+3. **EPR-05** — chọn nơi đặt bản sao off-site (ví dụ kéo `/backup` sang node khác qua Tailscale bằng `rsync`, hoặc đẩy lên một bucket) rồi tôi viết bước đó.
 
 ## 10. Runbook khôi phục
 
