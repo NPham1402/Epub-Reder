@@ -762,6 +762,29 @@ async function ingestChapters(bookId, onProgress) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// An .epub is a zip, and a zip's index sits at its END. A download that was cut
+// short (the usual way an .epub turns out unreadable) has no such index, and
+// would otherwise upload for minutes before failing with a cryptic server
+// error. Look at the file's head and tail first. Returns a message, or null if
+// the file looks complete.
+async function zipProblem(file) {
+  const EOCD = 0x06054b50; // "end of central directory" record signature
+  if (file.size < 22) return "This file is too small to be an EPUB.";
+  const head = new Uint8Array(await file.slice(0, 2).arrayBuffer());
+  if (head[0] !== 0x50 || head[1] !== 0x4b) return "This doesn't look like an EPUB (it isn't a zip file).";
+  const tailLen = Math.min(file.size, 65557); // record (22) + longest possible comment (65535)
+  const tail = new DataView(await file.slice(file.size - tailLen).arrayBuffer());
+  for (let i = tailLen - 22; i >= 0; i--) {
+    if (tail.getUint32(i, true) !== EOCD) continue;
+    const cdSize = tail.getUint32(i + 12, true);
+    const cdOffset = tail.getUint32(i + 16, true);
+    if (cdSize === 0xffffffff || cdOffset === 0xffffffff) return null; // zip64: the server checks it
+    const eocdAt = file.size - tailLen + i;
+    return cdOffset + cdSize <= eocdAt ? null : "This file is incomplete: its index points past the end of the file. It looks like a cut-off download — download it again.";
+  }
+  return "This file is incomplete: the end of the zip is missing. It looks like a cut-off download — download it again.";
+}
+
 // Sends `file` to the server in small parts (see /api/uploads) instead of one
 // long request. A proxy in front of the server gives a single request only so
 // long to deliver its body, and on a slow or flaky link a big file blows past
@@ -826,6 +849,13 @@ async function uploadFile(file) {
   status.hidden = false;
   status.classList.remove("err");
   const mb = (n) => (n / 1048576).toFixed(1);
+
+  const problem = await zipProblem(file);
+  if (problem) {
+    status.classList.add("err");
+    status.textContent = `! ${problem} (${mb(file.size)} MB)`;
+    return;
+  }
   status.textContent = `> uploading ${file.name} … 0%`;
 
   const up = await uploadInParts(file, {

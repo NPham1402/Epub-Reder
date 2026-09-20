@@ -389,7 +389,16 @@ async function createBookFromBytes(env: Env, bytes: Uint8Array): Promise<CreateR
 
     let meta;
     try { meta = parseEpubMeta(bytes); }
-    catch (err) { return { status: 422, body: { error: "could not parse EPUB: " + errMsg(err) } }; }
+    catch (err) {
+      const msg = errMsg(err);
+      // fflate's own wording for a zip with its index missing/cut off means nothing to a user.
+      const cutOff = /invalid zip data|unexpected eof/i.test(msg);
+      return {
+        status: 422,
+        body: { error: "could not parse EPUB: " + (cutOff
+          ? "the zip data is missing or cut off (an incomplete download?) — get the file again" : msg) },
+      };
+    }
     if (meta.spine.length === 0) {
       return { status: 422, body: { error: "could not parse EPUB: no readable chapters found" } };
     }

@@ -104,6 +104,17 @@ describe("upload in parts", () => {
     }
   });
 
+  test("an EPUB whose tail is missing is refused with a plain 'cut off' message", async () => {
+    const cut = EPUB.slice(0, Math.floor(EPUB.length * 0.94));
+    const { body } = await startUpload(srv.base, cookie, cut.length);
+    const id = body.id!;
+    for (const [n, p] of partsOf(cut).entries()) await putPart(srv.base, cookie, id, n, p);
+    const done = await completeUpload(srv.base, cookie, id);
+    assert.equal(done.res.status, 422);
+    assert.match(done.body.error!, /could not parse EPUB: the zip data is missing or cut off/);
+    assert.doesNotMatch(done.body.error!, /invalid zip data/);
+  });
+
   test("one-request upload: a declared size that does not match is reported as cut off", async () => {
     const fd = new FormData();
     fd.append("size", String(EPUB.length + 12345));
