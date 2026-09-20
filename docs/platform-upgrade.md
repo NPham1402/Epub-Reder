@@ -44,7 +44,7 @@ Trạng thái: ✅ xong + có test · ⏳ cần chủ hệ thống · 🔲 chưa
 | EPR-01 | P0 | Giới hạn thử đăng nhập: 5 lần/15 phút/client + trần toàn cục 60 | S | ✅ | Lần 6 → 429 kể cả đúng mật khẩu; client khác không bị ảnh hưởng; trần toàn cục chặn được địa chỉ giả |
 | EPR-02 | P0 | Cloudflare Access trước `vs.dophamnguyen.xyz` | S | ⏳ | Trang đăng nhập không tải được khi chưa qua Access |
 | EPR-03 | P0 | Commit SealedSecret vào git | S | ⏳ | `apps/epub-reader/sealedsecret.yaml` có trong `ci-cd-platform` |
-| EPR-04 | P1 | CronJob backup hằng đêm (snapshot SQLite `VACUUM INTO` + mirror `objects/`, giữ 14 bản) | M | ✅ | **Diễn tập khôi phục tự động**: backup → xoá sạch dữ liệu → restore → mọi chương khớp từng byte |
+| EPR-04 | P1 | CronJob backup hằng đêm (snapshot SQLite `VACUUM INTO` + mirror `objects/`, giữ 14 bản) | M | ✅ | **Diễn tập khôi phục tự động**: backup → xoá sạch dữ liệu → restore → mọi chương khớp từng byte. **Đã chạy trên volume thật của cụm (2026-09-20):** backup 3 file/38 MB; khôi phục vào thư mục tạm: `integrity_check` ok, 1 sách/2389 chương/3 file, 4 giây |
 | EPR-05 | P1 | Backup **off-site** | M | ⏳ | Bản sao nằm ngoài node/đĩa đang chạy app và đã khôi phục thử từ đó |
 | EPR-06 | P1 | Test + cổng CI: typecheck + 25 test; đỏ thì không đẩy image | M | ✅ | PR/push chạy `npm test`; job build phụ thuộc job test |
 | EPR-07 | P1 | Tự ghim tag `:<sha>` vào manifest để cụm tự cập nhật | S | ⏳ | Cần secret `CI_CD_PLATFORM_TOKEN`; xanh → commit vào `ci-cd-platform` → ArgoCD rollout |
@@ -65,7 +65,7 @@ Sửa kèm theo: ghi tiến độ đọc cho sách không tồn tại giờ tr�
 | Giai đoạn | Nội dung | Cổng thoát (đo được) | TT |
 |---|---|---|---|
 | 0 – 72 giờ | EPR-01, 02, 03 | Gõ sai 5 lần → 429; trang đăng nhập không mở được khi chưa qua Access; secret có trong git | 1/3 (còn 02, 03) |
-| Tuần 1–2 | EPR-04…10 | Diễn tập khôi phục 0 chương lệch; CI đỏ thì không sinh image; bản mới tự lên cụm | phần code xong; còn 05, 07 |
+| Tuần 1–2 | EPR-04…10 | Diễn tập khôi phục 0 chương lệch; CI đỏ thì không sinh image; bản mới tự lên cụm | backup + khôi phục đã chứng minh trên cụm thật; còn 05, 07 |
 | Tuần 3–4 | EPR-11…14 | 0 vi phạm CSP; backup off-site đã khôi phục thử; có cảnh báo đĩa | code xong; còn 14 |
 | Sau đó | EPR-15, 16 | Theo quyết định 1 và 2 | chưa bắt đầu |
 
@@ -74,11 +74,13 @@ Sửa kèm theo: ghi tiến độ đọc cho sách không tồn tại giờ tr�
 | Chỉ số | Mục tiêu | Hiện tại |
 |---|---|---|
 | Nạp sách 3000 chương | p95 < 30 s | ~3,3 s |
-| Toàn vẹn sau khôi phục | 0 chương lệch | 0/40 (test), 0/2953 (đo tay) |
+| Toàn vẹn sau khôi phục | 0 chương lệch | 0/40 (test), 0/2953 (đo tay); cụm thật: `integrity_check` ok, 2389 chương có mặt (chưa so nội dung từng chương, xem lưu ý dưới bảng) |
 | RPO (mất dữ liệu tối đa) | 24 giờ | 24 giờ **nhưng cùng node** |
-| RTO (thời gian khôi phục) | 30 phút | chưa đo trên cụm thật |
+| RTO (thời gian khôi phục) | 30 phút | Job khôi phục 37 MB: 4 giây (chưa gồm ngừng app/ArgoCD và dữ liệu lớn hơn) |
 | Test | 100% pass trước khi có image | 25/25, ~10 s |
 | Vi phạm CSP | 0 | 0 |
+
+Lưu ý: diễn tập trên cụm mới kiểm tra `integrity_check`, số sách/chương và số file trên bản khôi phục, chưa khởi động app trên dữ liệu đó. Việc so nội dung từng chương sau khôi phục được chứng minh bởi `tests/backup.test.ts` trên máy phát triển. Đo RTO thật cần chạy đủ runbook (ngừng app → khôi phục vào PVC dữ liệu → bật lại), lúc đó là dữ liệu thật của người dùng nên chỉ làm khi cần.
 
 **Definition of Done cho một thay đổi:** có test tái hiện lỗi/tính năng; `npm run typecheck` và `npm test` xanh; nếu đụng migration thì dựng được DB mới từ đầu; nếu đụng luồng UI thì chạy thử trong trình duyệt thật, không chỉ `node --check`.
 
