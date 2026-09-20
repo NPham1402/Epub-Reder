@@ -115,3 +115,18 @@ Lưu ý: diễn tập trên cụm mới kiểm tra `integrity_check`, số sách
 5. Sách nào đang nạp dở lúc backup sẽ tự được tiếp tục khi mở (hoặc bị dọn sau 24 giờ nếu chưa từng nạp xong).
 
 Toàn bộ quy trình này chạy tự động trong `tests/backup.test.ts` (backup → xoá sạch → restore → so từng chương), nên nếu test xanh thì công cụ khôi phục dùng được; phần chưa được kiểm chứng là chạy trên volume thật của cụm.
+
+## 11. Việc còn lại — đã ghi, chưa làm (tạm hoãn theo yêu cầu 2026-09-20)
+
+Thứ tự đề xuất khi quay lại: EPR-02 → 05 → 07 → 14 → 15. EPR-16 chỉ khi quyết định 2 đổi.
+
+| ID | Ai làm | Cần gì để bắt đầu | Việc cụ thể |
+|---|---|---|---|
+| EPR-02 | Chủ hệ thống | Không cần gì thêm | Zero Trust → Access → Applications → thêm `vs.dophamnguyen.xyz`, policy cho email của bạn. Xong thì kiểm tra `curl -I https://vs.dophamnguyen.xyz/` bị chuyển tới trang đăng nhập Access |
+| EPR-05 | Cả hai | **Chọn nơi đặt bản sao**: (a) `rsync` `/backup` sang node khác qua Tailscale (rẻ nhất, dùng hạ tầng có sẵn, cần đường SSH/khoá giữa hai node), hoặc (b) bucket (R2 / Oracle Object Storage, cần khoá truy cập) | Viết bước sao chép ra ngoài node vào CronJob; sau đó **diễn tập khôi phục từ bản sao off-site** (chưa khôi phục thử được thì chưa tính là xong) |
+| EPR-07 | Chủ hệ thống | Tạo PAT fine-grained: Contents read & write trên `Npham140201/ci-cd-platform` | Lưu thành secret `CI_CD_PLATFORM_TOKEN` của repo EPUB Reader; job `pin-image` đã viết sẵn sẽ tự chạy. Kiểm tra: push một commit → xuất hiện commit "epub-reader: image ..." trong `ci-cd-platform` |
+| EPR-14 | Tôi | **Chọn hệ thống cảnh báo** (Beszel / eBOSS_LOG / Zalo). App đã ghi log `LOW DISK` khi dưới 10% và `/healthz` trả `disk.free_pct`; đĩa của PVC là đĩa của node, và Beszel đã theo dõi đĩa host nên có thể chỉ cần đặt ngưỡng ở đó | Nối log/số liệu vào cảnh báo, thử bằng cách hạ ngưỡng tạm để thấy cảnh báo bắn |
+| EPR-15 | Tôi | **Chốt quyết định 1**: không quay lại Cloudflare. Nên đợi vài tuần chạy ổn trên k3s rồi mới bỏ vì không quay lại được | Ingest một request; xoá staging/multipart trong `src/index.ts`; xoá `deploy.yml`, `scripts/upload-book.ts`, `wrangler.jsonc` và phụ thuộc `wrangler`; giữ test xanh |
+| EPR-16 | Tôi | Chỉ khi bạn muốn nhiều người dùng hoặc tìm kiếm toàn văn | Thêm `user_id` vào `books`/`progress` từ đầu, không vá |
+
+Việc chưa kiểm chứng cần nhớ: diễn tập khôi phục trên cụm chưa khởi động app trên dữ liệu đã khôi phục, và chưa đo RTO của cả runbook (mục 7).
