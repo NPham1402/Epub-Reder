@@ -760,20 +760,86 @@ async function ingestChapters(bookId, onProgress) {
   }
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Sends `file` to the server in small parts (see /api/uploads) instead of one
+// long request. A proxy in front of the server gives a single request only so
+// long to deliver its body, and on a slow or flaky link a big file blows past
+// that and arrives truncated. Small parts each finish in seconds, can be
+// retried on their own, and give real progress. Returns {ok, book} | {ok:false, error}.
+async function uploadInParts(file, { onProgress, onFinishing }) {
+  const CONCURRENCY = 3;
+  const MAX_TRIES = 6;
+
+  const start = await api("/api/uploads", { method: "POST", body: JSON.stringify({ size: file.size, name: file.name }) });
+  const info = await start.json().catch(() => ({}));
+  if (!start.ok) return { ok: false, error: info.error || `HTTP ${start.status}` };
+  const { id, part_size: partSize, parts } = info;
+
+  let confirmed = 0;
+  async function sendPart(n) {
+    const from = n * partSize;
+    const blob = file.slice(from, Math.min(file.size, from + partSize));
+    for (let attempt = 1; ; attempt++) {
+      let status = 0;
+      try {
+        const res = await fetch(`/api/uploads/${id}/parts/${n}`, { method: "PUT", body: blob, credentials: "same-origin" });
+        if (res.ok) { confirmed += blob.size; onProgress(confirmed); return; }
+        status = res.status;
+      } catch { /* network error: retry */ }
+      // 401 = signed out, 404/413 = the upload is gone or refused: retrying can't help.
+      if (status === 401 || status === 404 || status === 413) throw new Error(status === 401 ? "signed out — sign in again" : `upload rejected (HTTP ${status})`);
+      if (attempt >= MAX_TRIES) throw new Error(`part ${n + 1}/${parts} failed after ${MAX_TRIES} tries — check the connection`);
+      await sleep(Math.min(8000, 500 * 2 ** attempt));
+    }
+  }
+
+  let next = 0;
+  let failure = null;
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, parts) }, async () => {
+    while (next < parts && !failure) {
+      const n = next++;
+      try { await sendPart(n); } catch (e) { failure = e; }
+    }
+  }));
+  if (failure) return { ok: false, error: failure.message };
+
+  onFinishing();
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const res = await api(`/api/uploads/${id}/complete`, { method: "POST" }).catch(() => null);
+    if (res) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) return { ok: true, book: data };
+      if (res.status === 409 && Array.isArray(data.missing)) {
+        try { for (const n of data.missing) await sendPart(n); } catch (e) { return { ok: false, error: e.message }; }
+        continue;
+      }
+      if (res.status < 500 && res.status !== 429) return { ok: false, error: data.error || `HTTP ${res.status}` };
+    }
+    await sleep(1000 * attempt);
+  }
+  return { ok: false, error: "the upload was sent but could not be finished — check the connection and retry" };
+}
+
 async function uploadFile(file) {
   const status = $("#upload-status");
   status.hidden = false;
   status.classList.remove("err");
-  status.textContent = `> parsing ${file.name} …`;
-  const fd = new FormData();
-  fd.append("file", file);
-  const res = await api("/api/books", { method: "POST", body: fd });
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
+  const mb = (n) => (n / 1048576).toFixed(1);
+  status.textContent = `> uploading ${file.name} … 0%`;
+
+  const up = await uploadInParts(file, {
+    onProgress: (done) => {
+      status.textContent = `> uploading ${file.name} … ${Math.floor((done / file.size) * 100)}% (${mb(done)} / ${mb(file.size)} MB)`;
+    },
+    onFinishing: () => { status.textContent = `> parsing ${file.name} …`; },
+  });
+  if (!up.ok) {
     status.classList.add("err");
-    status.textContent = `! ${data.error || "upload failed (HTTP " + res.status + ")"}`;
+    status.textContent = `! ${up.error}`;
     return;
   }
+  const data = up.book;
 
   const result = await ingestChapters(data.id, (processed, total) => {
     status.textContent = `> indexing "${data.code_name}" … ${processed}/${total}`;

@@ -1,7 +1,7 @@
 // Background housekeeping, run on a timer by the Node/Docker server.
 
 import type { Env } from "./types";
-import { abortIngest, busyBooks, contentBinKey, legacyContentKey, spineMetaKey } from "./storage";
+import { abortIngest, busyBooks, contentBinKey, legacyContentKey, spineMetaKey, uploadPrefix } from "./storage";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -36,4 +36,25 @@ export async function cleanupStaleIngests(env: Env, olderThanMs = DAY_MS): Promi
     }
   }
   return removed;
+}
+
+// Removes an upload's stored parts. The uploads row is left alone: for a
+// completed upload it is what lets a retried "complete" be answered.
+export async function discardUploadParts(env: Env, id: string): Promise<void> {
+  try {
+    const { objects } = await env.BOOKS.list({ prefix: uploadPrefix(id) });
+    if (objects.length) await env.BOOKS.delete(objects.map((o) => o.key));
+  } catch {}
+}
+
+// Uploads that were started and never completed (a closed tab, a dead
+// connection) leave their parts behind; sweep them, and old completed rows.
+export async function cleanupStaleUploads(env: Env, olderThanMs = DAY_MS): Promise<number> {
+  const { results } = await env.DB.prepare(`SELECT id FROM uploads WHERE created_at < ?`)
+    .bind(Date.now() - olderThanMs).all<{ id: string }>();
+  for (const u of results) {
+    await discardUploadParts(env, u.id);
+    await env.DB.prepare(`DELETE FROM uploads WHERE id = ?`).bind(u.id).run();
+  }
+  return results.length;
 }

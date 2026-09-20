@@ -1,6 +1,6 @@
 # Kế hoạch nâng cấp nền tảng — EPUB Reader
 
-> Ngày: 2026-09-20 · Trạng thái: **10/16 mục backlog đã xong và có test; 3 mục cần chủ hệ thống (mục 9); 3 mục chưa làm (EPR-14, 15, 16).**
+> Ngày: 2026-09-20 · Trạng thái: **11/17 mục backlog đã xong và có test; 3 mục cần chủ hệ thống (mục 9); 3 mục chưa làm (EPR-14, 15, 16).** Sự cố upload ngày 2026-09-20 ở mục 12.
 >
 > Phương pháp lấy từ `Worker_Zalo/docs/platform-upgrade/` (baseline có bằng chứng → ưu tiên P0–P3 → quyết định cần chốt → lộ trình có cổng thoát → backlog có ID → chỉ số nghiệm thu → sổ rủi ro), thu nhỏ cho dự án một người: một file thay vì tám.
 
@@ -46,7 +46,7 @@ Trạng thái: ✅ xong + có test · ⏳ cần chủ hệ thống · 🔲 chưa
 | EPR-03 | P0 | Commit SealedSecret vào git | S | ✅ | `apps/epub-reader/sealedsecret.yaml` có trong `ci-cd-platform` (commit `4b74170`) |
 | EPR-04 | P1 | CronJob backup hằng đêm (snapshot SQLite `VACUUM INTO` + mirror `objects/`, giữ 14 bản) | M | ✅ | **Diễn tập khôi phục tự động**: backup → xoá sạch dữ liệu → restore → mọi chương khớp từng byte. **Đã chạy trên volume thật của cụm (2026-09-20):** backup 3 file/38 MB; khôi phục vào thư mục tạm: `integrity_check` ok, 1 sách/2389 chương/3 file, 4 giây |
 | EPR-05 | P1 | Backup **off-site** | M | ⏳ | Bản sao nằm ngoài node/đĩa đang chạy app và đã khôi phục thử từ đó |
-| EPR-06 | P1 | Test + cổng CI: typecheck + 25 test; đỏ thì không đẩy image | M | ✅ | PR/push chạy `npm test`; job build phụ thuộc job test |
+| EPR-06 | P1 | Test + cổng CI: typecheck + 31 test; đỏ thì không đẩy image | M | ✅ | PR/push chạy `npm test`; job build phụ thuộc job test |
 | EPR-07 | P1 | Tự ghim tag `:<sha>` vào manifest để cụm tự cập nhật | S | ⏳ | Cần secret `CI_CD_PLATFORM_TOKEN`; xanh → commit vào `ci-cd-platform` → ArgoCD rollout |
 | EPR-08 | P1 | Khoá ingest theo từng sách (409 khi trùng) | S | ✅ | 4 request song song → có 409, dữ liệu vẫn đúng từng byte |
 | EPR-09 | P1 | Dọn upload dở sau 24 giờ, **không bao giờ** dọn sách đang reindex | M | ✅ | Test khởi động lại với ngưỡng 0: upload dở bị xoá cả file, sách đang reindex còn nguyên và hoàn tất được |
@@ -57,6 +57,7 @@ Trạng thái: ✅ xong + có test · ⏳ cần chủ hệ thống · 🔲 chưa
 | EPR-14 | P2 | Cảnh báo đĩa sắp đầy (~80 MB/sách lớn) | S | 🔲 | Log `LOW DISK` (đã có) được đẩy thành cảnh báo qua hệ thống alert hiện có |
 | EPR-15 | P2 | Bỏ đường Cloudflare Worker (xem quyết định 1) | M | 🔲 | Ingest một request, xoá staging/multipart, `deploy.yml` |
 | EPR-16 | P3 | Nhiều người dùng / tìm kiếm toàn văn | L | 🔲 | Chỉ làm khi quyết định 2 đổi |
+| EPR-17 | P1 | Tải lên theo mảnh 256 KB (thử lại từng mảnh, song song 3, có tiến độ, `complete` lặp lại an toàn) + báo rõ khi upload bị cắt | M | ✅ | File 22 MB qua trình duyệt thật, cố ý làm hỏng 4 mảnh (đứt kết nối ×2, 504, 429): vẫn ra đủ 2953 chương và đúng một cuốn sách; 6 test tích hợp |
 
 Sửa kèm theo: ghi tiến độ đọc cho sách không tồn tại giờ trả 404; đọc chương khi sách đang index dở trả 409 (trước đó có thể trả sai nội dung vì offset mới trỏ vào file cũ); so sánh mật khẩu bằng HMAC nên không lộ độ dài.
 
@@ -77,7 +78,7 @@ Sửa kèm theo: ghi tiến độ đọc cho sách không tồn tại giờ tr�
 | Toàn vẹn sau khôi phục | 0 chương lệch | 0/40 (test), 0/2953 (đo tay); cụm thật: `integrity_check` ok, 2389 chương có mặt (chưa so nội dung từng chương, xem lưu ý dưới bảng) |
 | RPO (mất dữ liệu tối đa) | 24 giờ | 24 giờ **nhưng cùng node** |
 | RTO (thời gian khôi phục) | 30 phút | Job khôi phục 37 MB: 4 giây (chưa gồm ngừng app/ArgoCD và dữ liệu lớn hơn) |
-| Test | 100% pass trước khi có image | 25/25, ~10 s |
+| Test | 100% pass trước khi có image | 31/31, ~12 s |
 | Vi phạm CSP | 0 | 0 |
 
 Lưu ý: diễn tập trên cụm mới kiểm tra `integrity_check`, số sách/chương và số file trên bản khôi phục, chưa khởi động app trên dữ liệu đó. Việc so nội dung từng chương sau khôi phục được chứng minh bởi `tests/backup.test.ts` trên máy phát triển. Đo RTO thật cần chạy đủ runbook (ngừng app → khôi phục vào PVC dữ liệu → bật lại), lúc đó là dữ liệu thật của người dùng nên chỉ làm khi cần.
@@ -130,3 +131,26 @@ Thứ tự đề xuất khi quay lại: EPR-02 → 05 → 07 → 14 → 15. EPR-
 | EPR-16 | Tôi | Chỉ khi bạn muốn nhiều người dùng hoặc tìm kiếm toàn văn | Thêm `user_id` vào `books`/`progress` từ đầu, không vá |
 
 Việc chưa kiểm chứng cần nhớ: diễn tập khôi phục trên cụm chưa khởi động app trên dữ liệu đã khôi phục, và chưa đo RTO của cả runbook (mục 7).
+
+## 12. Sự cố 2026-09-20: upload chậm rồi báo "invalid zip data"
+
+**Triệu chứng.** Upload đứng ở "parsing…" rất lâu; với file 22 MB thì báo `could not parse EPUB: invalid zip data` dù file gốc là zip hợp lệ.
+
+**Đo được (từ máy người dùng, qua Cloudflare Tunnel):**
+- Tải tới Cloudflare Singapore: 7,6 MB trong 3,2 giây (bình thường).
+- Tải tới pod qua tunnel: 25–80 KB/s, và Cloudflare trả 504 sau 100 giây. Request nhỏ vẫn ổn (0,5–2,5 giây).
+- Log pod: hai dòng `POST /api/books 400 60005ms`: request bị cắt đúng 60 giây, body cụt nên `formData` lỗi hoặc ghép ra file thiếu phần đuôi.
+
+**Nguyên nhân (hai thứ chồng nhau):**
+1. **MTU của pod là 1280** trong khi Tailscale cũng chỉ 1280 mà VXLAN cần thêm khoảng 50 byte, nên gói lớn bị phân mảnh/rớt (`packetization-layer-pmtud-mode: blackhole` khiến nó bò chứ không đứng). Đường đi lại băng qua mạng giữa các node tới hai lần: `cloudflared` (ubuntu-16gb hoặc vps-24gb) → Traefik (ubuntu-8gb) → app (ubuntu-16gb).
+2. **Traefik v3 cắt request sau 60 giây** (`readTimeout` mặc định), mà chưa có gì trong app phân biệt "body bị cắt" với "file hỏng".
+
+**Đã làm:**
+- Trong app (EPR-17): tải theo mảnh nhỏ nên không còn request nào dài; thiếu/cụt thì báo rõ. Đây là lớp bảo vệ độc lập với chất lượng mạng.
+- Người dùng đặt `mtu: "1230"` trong `cilium-config`, khởi động lại agent và tạo lại pod app/Traefik/cloudflared; pod app đã lên MTU 1230.
+
+**Chưa kiểm chứng (nhớ kiểm tra):**
+- Tốc độ sau khi sửa MTU chưa đo sạch: lần đo ngay sau khi thay pod trúng lúc `cloudflared` đang kết nối lại (lỗi 1033/530), nên số liệu không dùng được.
+- Nghi vấn cần loại trừ: QUIC (cloudflared mặc định) cần gói UDP khoảng 1252 byte, mà pod MTU 1230 có thể làm nó phải rớt về HTTP/2. Nếu tunnel chập chờn, xem `kubectl logs deploy/cloudflared`; cách né là đặt `TUNNEL_TRANSPORT_PROTOCOL=http2` cho Deployment cloudflared.
+- `cloudflared` đã restart 50 và 59 lần trong 48 ngày trước cả sự cố này; chưa rõ vì sao.
+- Bản hoàn tác MTU: xoá khoá `mtu` khỏi `cilium-config` rồi khởi động lại DaemonSet cilium.

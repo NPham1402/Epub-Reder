@@ -11,6 +11,9 @@ export const stagedPrefix = (id: string) => `books/${id}/_staged/`;
 export const stagedKey = (id: string, offset: number) =>
   `${stagedPrefix(id)}${String(offset).padStart(12, "0")}.bin`;
 
+export const uploadPrefix = (id: string) => `uploads/${id}/`;
+export const uploadPartKey = (id: string, n: number) => `${uploadPrefix(id)}${String(n).padStart(6, "0")}`;
+
 // Books with an ingest/reindex/delete currently running in this process. Two
 // overlapping requests for the same book would both read the same resume
 // cursor and race on the multipart state, so the mutating routes refuse

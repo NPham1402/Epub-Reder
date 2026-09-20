@@ -1,4 +1,5 @@
 import { Hono, type Context } from "hono";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import type { Env } from "./types";
@@ -7,8 +8,9 @@ import { fakeCodeName, fakeFileName } from "./names";
 import { passcodeMatches, signSession, verifySession } from "./auth";
 import { FailureLimiter } from "./ratelimit";
 import {
-  abortIngest, busyBooks, contentBinKey, legacyContentKey, spineMetaKey, stagedKey, stagedPrefix,
+  abortIngest, busyBooks, contentBinKey, legacyContentKey, spineMetaKey, stagedKey, stagedPrefix, uploadPartKey, uploadPrefix,
 } from "./storage";
+import { discardUploadParts } from "./maintenance";
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 const MAX_EPUB_BYTES = 80 * 1024 * 1024; // 80 MB guard
@@ -23,6 +25,10 @@ const PART_SIZE_BYTES = 5 * 1024 * 1024 + 65536;
 // so this stays conservative rather than tuned to a number that isn't
 // actually reliable.
 const CHUNK_SIZE = 30;
+// Size of one upload part. Small enough that even a very slow link (tens of
+// KB/s) finishes a part in seconds, well inside the ~60 s a proxy in front
+// will wait for a single request body.
+const UPLOAD_PART_BYTES = 256 * 1024;
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -372,51 +378,151 @@ app.get("/api/books", async (c) => {
 
 // --- Upload: stage 1 — store the raw file + cheap metadata, no chapter
 // content yet. The client then drives /ingest-chunk to completion. ----------
-app.post("/api/books", async (c) => {
+interface CreateResult { status: number; body: Record<string, unknown> }
+
+// Validates the bytes as an EPUB and registers it as a not-yet-ingested book.
+async function createBookFromBytes(env: Env, bytes: Uint8Array): Promise<CreateResult> {
   let id: string | null = null;
   let rawKey: string | null = null;
   try {
-    const form = await c.req.formData().catch(() => null);
-    const file = form?.get("file");
-    if (!(file instanceof File)) return c.json({ error: "missing file" }, 400);
-    const buffer = await file.arrayBuffer();
-    if (buffer.byteLength > MAX_EPUB_BYTES) return c.json({ error: "file too large" }, 413);
-    const bytes = new Uint8Array(buffer);
+    if (bytes.byteLength > MAX_EPUB_BYTES) return { status: 413, body: { error: "file too large" } };
 
     let meta;
     try { meta = parseEpubMeta(bytes); }
-    catch (err) { return c.json({ error: "could not parse EPUB: " + errMsg(err) }, 422); }
+    catch (err) { return { status: 422, body: { error: "could not parse EPUB: " + errMsg(err) } }; }
     if (meta.spine.length === 0) {
-      return c.json({ error: "could not parse EPUB: no readable chapters found" }, 422);
+      return { status: 422, body: { error: "could not parse EPUB: no readable chapters found" } };
     }
 
     id = crypto.randomUUID();
     rawKey = `raw/${id}.epub`;
     const codeName = fakeCodeName(meta.title);
-    await c.env.BOOKS.put(rawKey, bytes, { httpMetadata: { contentType: "application/epub+zip" } });
-    await c.env.BOOKS.put(
+    await env.BOOKS.put(rawKey, bytes, { httpMetadata: { contentType: "application/epub+zip" } });
+    await env.BOOKS.put(
       spineMetaKey(id),
       JSON.stringify({ spine: meta.spine, toc: [...meta.tocMap.entries()] }),
       { httpMetadata: { contentType: "application/json" } },
     );
-    await c.env.DB.prepare(
+    await env.DB.prepare(
       `INSERT INTO books (id, title, author, language, r2_key, code_name, chapter_count, created_at, ingest_done, ever_completed)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0)`,
     ).bind(id, meta.title, meta.author, meta.language, rawKey, codeName, meta.spine.length, Date.now()).run();
 
-    return c.json({ id, title: meta.title, code_name: codeName, total: meta.spine.length });
+    return { status: 200, body: { id, title: meta.title, code_name: codeName, total: meta.spine.length } };
   } catch (err) {
     if (id) {
       try {
-        await c.env.DB.batch([
-          c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
-          c.env.DB.prepare(`DELETE FROM books WHERE id = ?`).bind(id),
+        await env.DB.batch([
+          env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
+          env.DB.prepare(`DELETE FROM books WHERE id = ?`).bind(id),
         ]);
-        await c.env.BOOKS.delete([contentBinKey(id), spineMetaKey(id), ...(rawKey ? [rawKey] : [])]);
+        await env.BOOKS.delete([contentBinKey(id), spineMetaKey(id), ...(rawKey ? [rawKey] : [])]);
       } catch {}
     }
     console.error("upload error", err);
-    return c.json({ error: "server error: " + errMsg(err) }, 500);
+    return { status: 500, body: { error: "server error: " + errMsg(err) } };
+  }
+}
+
+// One-request upload (kept for scripts and small files; the web UI uses the
+// part-by-part routes below). If the client says how big the file is, a
+// mismatch means the request was cut off in transit: say so, rather than
+// letting the parser report a confusing "invalid zip data".
+app.post("/api/books", async (c) => {
+  const form = await c.req.formData().catch(() => null);
+  const file = form?.get("file");
+  if (!(file instanceof File)) return c.json({ error: "missing file" }, 400);
+  const declared = Number(form?.get("size"));
+  if (declared && declared !== file.size) {
+    return c.json({ error: `upload was cut off: received ${file.size} of ${declared} bytes` }, 400);
+  }
+  const r = await createBookFromBytes(c.env, new Uint8Array(await file.arrayBuffer()));
+  return c.json(r.body, r.status as ContentfulStatusCode);
+});
+
+// --- Upload in parts: create -> PUT each part (any order, safe to repeat) ->
+// complete. Each request is small and short, so a slow or flaky link never
+// hits a proxy's whole-request timeout. -------------------------------------
+app.post("/api/uploads", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as { size?: number; name?: string };
+  const size = Number(body.size);
+  if (!Number.isInteger(size) || size <= 0) return c.json({ error: "size is required" }, 400);
+  if (size > MAX_EPUB_BYTES) return c.json({ error: "file too large" }, 413);
+  const id = crypto.randomUUID();
+  await c.env.DB.prepare(
+    `INSERT INTO uploads (id, size, part_size, name, created_at) VALUES (?, ?, ?, ?, ?)`,
+  ).bind(id, size, UPLOAD_PART_BYTES, String(body.name ?? "").slice(0, 200), Date.now()).run();
+  return c.json({ id, part_size: UPLOAD_PART_BYTES, parts: Math.ceil(size / UPLOAD_PART_BYTES) });
+});
+
+interface UploadRow { size: number; part_size: number; book_id: string | null }
+
+app.put("/api/uploads/:id/parts/:n", async (c) => {
+  const id = c.req.param("id");
+  const n = Number(c.req.param("n"));
+  const up = await c.env.DB.prepare(`SELECT size, part_size, book_id FROM uploads WHERE id = ?`)
+    .bind(id).first<UploadRow>();
+  if (!up || up.book_id) return c.json({ error: "not found" }, 404);
+  const parts = Math.ceil(up.size / up.part_size);
+  if (!Number.isInteger(n) || n < 0 || n >= parts) return c.json({ error: "no such part" }, 400);
+  const expected = n === parts - 1 ? up.size - n * up.part_size : up.part_size;
+  const data = new Uint8Array(await c.req.arrayBuffer());
+  if (data.byteLength !== expected) {
+    return c.json({ error: `part ${n} must be ${expected} bytes but ${data.byteLength} arrived (cut off?)` }, 400);
+  }
+  await c.env.BOOKS.put(uploadPartKey(id, n), data);
+  return c.json({ ok: true });
+});
+
+app.post("/api/uploads/:id/complete", async (c) => {
+  const id = c.req.param("id");
+  const lock = `upload:${id}`;
+  if (busyBooks.has(lock)) return c.json({ error: "this upload is already being completed" }, 409);
+  busyBooks.add(lock);
+  try {
+    const up = await c.env.DB.prepare(`SELECT size, part_size, book_id FROM uploads WHERE id = ?`)
+      .bind(id).first<UploadRow>();
+    if (!up) return c.json({ error: "not found" }, 404);
+
+    // Already assembled (the client is retrying after a lost response): answer with the same book.
+    if (up.book_id) {
+      const book = await c.env.DB.prepare(`SELECT id, title, code_name, chapter_count FROM books WHERE id = ?`)
+        .bind(up.book_id).first<{ id: string; title: string; code_name: string; chapter_count: number }>();
+      if (!book) return c.json({ error: "the book from this upload no longer exists" }, 404);
+      return c.json({ id: book.id, title: book.title, code_name: book.code_name, total: book.chapter_count });
+    }
+
+    const parts = Math.ceil(up.size / up.part_size);
+    const { objects } = await c.env.BOOKS.list({ prefix: uploadPrefix(id) });
+    const have = new Set(objects.map((o) => o.key));
+    const missing: number[] = [];
+    for (let i = 0; i < parts; i++) if (!have.has(uploadPartKey(id, i))) missing.push(i);
+    if (missing.length) {
+      return c.json({ error: `missing parts: ${missing.slice(0, 10).join(", ")}${missing.length > 10 ? "..." : ""}`, missing }, 409);
+    }
+
+    const bytes = new Uint8Array(up.size);
+    let pos = 0;
+    for (let i = 0; i < parts; i++) {
+      const obj = await c.env.BOOKS.get(uploadPartKey(id, i));
+      if (!obj) return c.json({ error: `part ${i} is missing`, missing: [i] }, 409);
+      const chunk = new Uint8Array(await obj.arrayBuffer());
+      bytes.set(chunk, pos);
+      pos += chunk.length;
+    }
+    if (pos !== up.size) return c.json({ error: "assembled size does not match" }, 400);
+
+    const r = await createBookFromBytes(c.env, bytes);
+    await discardUploadParts(c.env, id);
+    if (r.status === 200) {
+      await c.env.DB.prepare(`UPDATE uploads SET book_id = ? WHERE id = ?`).bind(r.body.id as string, id).run();
+    } else {
+      // A definitive refusal (not an EPUB, too large...): retrying can't change it.
+      await c.env.DB.prepare(`DELETE FROM uploads WHERE id = ?`).bind(id).run();
+    }
+    return c.json(r.body, r.status as ContentfulStatusCode);
+  } finally {
+    busyBooks.delete(lock);
   }
 });
 

@@ -17,7 +17,7 @@ import { serve } from "@hono/node-server";
 import { statfsSync } from "node:fs";
 import { resolve } from "node:path";
 import app from "../src/index";
-import { cleanupStaleIngests } from "../src/maintenance";
+import { cleanupStaleIngests, cleanupStaleUploads } from "../src/maintenance";
 import type { Env } from "../src/types";
 import { SqliteD1 } from "./d1-sqlite";
 import { FsR2 } from "./r2-fs";
@@ -80,6 +80,8 @@ async function runMaintenance() {
   try {
     const removed = await cleanupStaleIngests(env, staleHours * 3_600_000);
     if (removed.length) console.log(`removed ${removed.length} abandoned upload(s)`);
+    const parts = await cleanupStaleUploads(env, staleHours * 3_600_000);
+    if (parts) console.log(`swept ${parts} stale upload session(s)`);
   } catch (err) {
     console.error("maintenance failed", err);
   }

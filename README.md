@@ -89,7 +89,7 @@ That protects against corruption and accidental deletion; it is **not off-site**
 
 Failed logins are throttled (5 per client per 15 minutes, plus a global ceiling);
 "Sign out everywhere" revokes every session; responses carry a strict CSP and the usual
-hardening headers; uploads are size-checked before anything is unzipped; `/healthz`
+hardening headers; uploads are sent in 256 KB parts (retried individually, so a slow link or a proxy's request timeout can't leave a truncated file) and size-checked before anything is unzipped; `/healthz`
 checks the database. The plan, its evidence and what's left are in
 `docs/platform-upgrade.md`.
 
