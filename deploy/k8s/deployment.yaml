@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: epub-reader
+  namespace: default
+spec:
+  replicas: 1
+  # SQLite lives on the volume: never let two pods overlap during a rollout.
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: epub-reader}}
+  template:
+    metadata: {labels: {app: epub-reader}}
+    spec:
+      securityContext:
+        fsGroup: 1000
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - {key: kubernetes.io/hostname, operator: In, values: ["ubuntu-16gb"]}
+      containers:
+      - name: epub-reader
+        image: ghcr.io/npham1402/epub-reder:latest
+        ports: [{containerPort: 8787}]
+        env:
+        - name: ACCESS_PASSCODE
+          valueFrom: {secretKeyRef: {name: epub-reader-secrets, key: ACCESS_PASSCODE}}
+        - name: SESSION_SECRET
+          valueFrom: {secretKeyRef: {name: epub-reader-secrets, key: SESSION_SECRET}}
+        # Users reach the app over HTTPS (Cloudflare) even though the hop
+        # into the pod is plain HTTP, so force the Secure cookie flag.
+        - {name: COOKIE_SECURE, value: "true"}
+        - {name: APP_TITLE, value: "Internal Developer Docs"}
+        volumeMounts:
+        - {name: data, mountPath: /data}
+        readinessProbe:
+          httpGet: {path: /, port: 8787}
+          periodSeconds: 10
+        livenessProbe:
+          httpGet: {path: /, port: 8787}
+          initialDelaySeconds: 15
+          periodSeconds: 30
+        resources:
+          requests: {cpu: "50m", memory: "128Mi"}
+          # An upload is buffered in memory (a few copies of the .epub).
+          limits: {memory: "1Gi"}
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          capabilities: {drop: ["ALL"]}
+          seccompProfile: {type: RuntimeDefault}
+      volumes:
+      - name: data
+        persistentVolumeClaim: {claimName: epub-reader-data}

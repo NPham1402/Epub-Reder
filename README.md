@@ -30,7 +30,45 @@ Browser (public/) ──► Worker (Hono, src/index.ts) ──► D1  (books, ch
 - **Read**: the frontend pulls chapter JSON and renders it as documentation.
 - **Auth**: a single access passcode → HMAC-signed httpOnly session cookie.
 
-## One-time setup
+## Self-hosting with Docker (no Cloudflare, no Worker limits)
+
+The same app also runs as one Node process in one Docker image: D1 is replaced by
+SQLite (`node:sqlite`, built into Node 24) and R2 by a directory, both under a single
+volume at `/data`. See `server/` — thin stand-ins that expose the same API the Worker
+code already uses, so `src/` is shared unchanged. Nothing here has a per-request CPU or
+memory cap, so a 3000-chapter book uploads in a few seconds.
+
+```bash
+docker build -t epub-reader .
+docker run -d --name epub-reader -p 8787:8787 -v epub-data:/data \
+  -e ACCESS_PASSCODE='your passcode' \
+  -e SESSION_SECRET="$(openssl rand -base64 48)" \
+  epub-reader
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ACCESS_PASSCODE`, `SESSION_SECRET` | required | login passcode / cookie-signing key |
+| `PORT` | `8787` | listen port |
+| `DATA_DIR` | `/data` | SQLite file + book files (mount a volume here, back it up) |
+| `COOKIE_SECURE` | auto | `true`/`false`; auto follows `X-Forwarded-Proto` / the URL |
+| `CHUNK_SIZE` | `300` | chapters per ingest request |
+
+Without HTTPS (e.g. `http://<vps-ip>:8787`) login still works because the session
+cookie only gets the `Secure` flag when the request is HTTPS. Put a TLS proxy in front
+for anything public.
+
+Run without Docker: `npm run build:server && ACCESS_PASSCODE=… SESSION_SECRET=… DATA_DIR=./data npm run start:server`.
+
+**On the k3s cluster** (`ci-cd-platform` repo): pushing to `main` builds the image via
+`.github/workflows/build-ghcr.yml` (arm64, → `ghcr.io/npham1402/epub-reder`). The
+manifests in `deploy/k8s/` follow that repo's `apps/<name>/` layout — copy them to
+`ci-cd-platform/apps/epub-reader/`, seal the secret (`secret.example.yaml` has the
+command), add `argocd-application.yaml` to `argocd/`, and publish the hostname on the
+`k3s-cluster` tunnel. The GHCR package must be public (like the other apps), or the
+cluster needs an image pull secret.
+
+## One-time setup (Cloudflare Workers deployment)
 
 Requires Node 18+ and a Cloudflare account.
 

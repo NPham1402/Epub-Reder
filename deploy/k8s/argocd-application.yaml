@@ -1,0 +1,20 @@
+# Goes in ci-cd-platform/argocd/epub-reader-application.yaml, next to the
+# other Application files. Apply once: kubectl apply -f <this file>.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: epub-reader
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/Npham140201/ci-cd-platform.git
+    targetRevision: main
+    path: apps/epub-reader
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
