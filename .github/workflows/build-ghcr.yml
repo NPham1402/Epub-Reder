@@ -1,17 +1,44 @@
-name: Build and push image to ghcr.io
+name: Test, build and push image to ghcr.io
 
-# Same pattern as the other app repos on the k3s cluster (see
+# Same image pattern as the other app repos on the k3s cluster (see
 # ci-cd-platform/docs/ARCHITECTURE.md): the cluster's nodes are arm64, so the
 # image MUST be built for linux/arm64 or pods fail with ImagePullBackOff
 # ("no match for platform in manifest").
+#
+# Tests gate the image: a red typecheck/test run never publishes anything.
 
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      # Install scripts (wrangler/workerd downloads) aren't needed to bundle or test.
+      - run: npm ci --ignore-scripts
+
+      - name: Typecheck (Worker, server, tests)
+        run: npm run typecheck
+
+      - name: Tests (unit + integration against the built server, incl. restore drill)
+        run: npm test
+
   build-and-push:
+    needs: test
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -43,3 +70,41 @@ jobs:
           tags: |
             ghcr.io/${{ steps.repo.outputs.name }}:latest
             ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}
+
+  # `:latest` never changes the manifest, so ArgoCD sees nothing to do and the
+  # running pod keeps the old image. Pinning the immutable :<sha> tag in the
+  # manifest repo makes every green build roll out by itself.
+  #
+  # Needs a secret CI_CD_PLATFORM_TOKEN: a fine-grained personal access token
+  # (or GitHub App token) with "Contents: read and write" on
+  # Npham140201/ci-cd-platform. Without it this job just skips.
+  pin-image:
+    needs: build-and-push
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      TOKEN: ${{ secrets.CI_CD_PLATFORM_TOKEN }}
+    steps:
+      - name: Skip (no CI_CD_PLATFORM_TOKEN secret)
+        if: env.TOKEN == ''
+        run: echo "CI_CD_PLATFORM_TOKEN is not set, so the manifest was not updated. The cluster keeps running its current image until it is restarted."
+
+      - name: Pin the new image tag in ci-cd-platform
+        if: env.TOKEN != ''
+        run: |
+          set -euo pipefail
+          git clone --depth 1 "https://x-access-token:${TOKEN}@github.com/Npham140201/ci-cd-platform.git" platform
+          cd platform
+          # The app and its nightly backup job must always run the same image.
+          sed -i -E "s|(image: ghcr\.io/npham1402/epub-reder):.*|\1:${GITHUB_SHA}|" \
+            apps/epub-reader/deployment.yaml apps/epub-reader/cronjob-backup.yaml
+          if git diff --quiet; then echo "manifest already pins this image"; exit 0; fi
+          git config user.name "epub-reader-ci"
+          git config user.email "ci@users.noreply.github.com"
+          git commit -am "epub-reader: image ${GITHUB_SHA::7}"
+          for attempt in 1 2 3; do
+            git push origin HEAD:main && exit 0
+            git pull --rebase origin main
+          done
+          echo "could not push the manifest update" >&2
+          exit 1

@@ -53,12 +53,45 @@ docker run -d --name epub-reader -p 8787:8787 -v epub-data:/data \
 | `DATA_DIR` | `/data` | SQLite file + book files (mount a volume here, back it up) |
 | `COOKIE_SECURE` | auto | `true`/`false`; auto follows `X-Forwarded-Proto` / the URL |
 | `CHUNK_SIZE` | `300` | chapters per ingest request |
+| `STALE_INGEST_HOURS` | `24` | uploads that never finished ingesting are deleted after this long |
 
 Without HTTPS (e.g. `http://<vps-ip>:8787`) login still works because the session
 cookie only gets the `Secure` flag when the request is HTTPS. Put a TLS proxy in front
 for anything public.
 
 Run without Docker: `npm run build:server && ACCESS_PASSCODE=… SESSION_SECRET=… DATA_DIR=./data npm run start:server`.
+
+### Tests
+
+```bash
+npm run typecheck   # Worker + server + tests
+npm test            # builds the server, then runs unit + integration tests (~10 s)
+```
+
+The integration tests start the real built server as a child process and use
+synthetic EPUBs (no real book needed). They cover chunked ingest across multipart
+boundaries (byte-exact), resume after a hard restart, overlapping requests, re-index,
+abandoned-upload cleanup, session revocation, login throttling, path traversal, a zip
+bomb, and a full backup → lose everything → restore drill. CI runs them before any image
+is published.
+
+### Backup and restore
+
+`dist/backup.mjs` ships in the image. `node backup.mjs` writes a consistent SQLite
+snapshot (safe while the app is running) plus a mirror of the book files into
+`BACKUP_DIR`, keeping `BACKUP_KEEP` snapshots (default 7); `node backup.mjs restore`
+copies the latest snapshot into an **empty** `DATA_DIR` and refuses to overwrite an
+existing database. On the cluster a nightly CronJob runs it (`deploy/k8s/cronjob-backup.yaml`).
+That protects against corruption and accidental deletion; it is **not off-site** — see
+`docs/platform-upgrade.md` for the restore runbook and what's still open.
+
+### What protects it
+
+Failed logins are throttled (5 per client per 15 minutes, plus a global ceiling);
+"Sign out everywhere" revokes every session; responses carry a strict CSP and the usual
+hardening headers; uploads are size-checked before anything is unzipped; `/healthz`
+checks the database. The plan, its evidence and what's left are in
+`docs/platform-upgrade.md`.
 
 **On the k3s cluster** (`ci-cd-platform` repo): pushing to `main` builds the image via
 `.github/workflows/build-ghcr.yml` (arm64, → `ghcr.io/npham1402/epub-reder`). The

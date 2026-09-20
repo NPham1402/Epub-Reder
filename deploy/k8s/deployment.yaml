@@ -34,8 +34,9 @@ spec:
         - {name: APP_TITLE, value: "Internal Developer Docs"}
         volumeMounts:
         - {name: data, mountPath: /data}
+        # Ready only when the database actually answers (not just the process).
         readinessProbe:
-          httpGet: {path: /, port: 8787}
+          httpGet: {path: /healthz, port: 8787}
           periodSeconds: 10
         livenessProbe:
           httpGet: {path: /, port: 8787}

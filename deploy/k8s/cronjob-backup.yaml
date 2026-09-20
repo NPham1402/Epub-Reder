@@ -1,0 +1,62 @@
+# Nightly backup of the app's volume: a consistent SQLite snapshot plus a
+# mirror of the book files, kept on a second volume (14 snapshots).
+#
+# Protects against corruption, a bad upgrade and accidental deletion. It is
+# NOT off-site: both volumes live on the same node's disk, so a dead node/disk
+# loses both. Copy /backup somewhere else as well (see docs/platform-upgrade.md).
+#
+# Restore: scale the app to 0, then run the same image with
+#   command: ["node","--disable-warning=ExperimentalWarning","backup.mjs","restore"]
+# against an EMPTY data volume (it refuses to touch an existing database).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: epub-reader-backup
+  namespace: default
+spec:
+  schedule: "17 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            fsGroup: 1000
+          affinity:
+            # local-path volumes are tied to one node: run where the data is.
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - {key: kubernetes.io/hostname, operator: In, values: ["ubuntu-16gb"]}
+          containers:
+          - name: backup
+            image: ghcr.io/npham1402/epub-reder:latest
+            command: ["node", "--disable-warning=ExperimentalWarning", "backup.mjs"]
+            env:
+            - {name: DATA_DIR, value: /data}
+            - {name: BACKUP_DIR, value: /backup}
+            - {name: BACKUP_KEEP, value: "14"}
+            volumeMounts:
+            # Read-write on purpose: reading a WAL-mode SQLite database needs
+            # to touch its -shm file.
+            - {name: data, mountPath: /data}
+            - {name: backup, mountPath: /backup}
+            resources:
+              requests: {cpu: "20m", memory: "64Mi"}
+              limits: {memory: "256Mi"}
+            securityContext:
+              allowPrivilegeEscalation: false
+              runAsNonRoot: true
+              runAsUser: 1000
+              capabilities: {drop: ["ALL"]}
+              seccompProfile: {type: RuntimeDefault}
+          volumes:
+          - name: data
+            persistentVolumeClaim: {claimName: epub-reader-data}
+          - name: backup
+            persistentVolumeClaim: {claimName: epub-reader-backup}
