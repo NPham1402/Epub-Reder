@@ -1,8 +1,9 @@
 name: Deploy to Cloudflare
 
+# Cloudflare deployment is now manual-only. The app is self-hosted as a Docker
+# image on the k3s cluster (see build-ghcr.yml and deploy/k8s/); pushes no
+# longer deploy to Cloudflare. Run this from the Actions tab if ever needed.
 on:
-  push:
-    branches: [main, master]
   workflow_dispatch:
 
 concurrency:
