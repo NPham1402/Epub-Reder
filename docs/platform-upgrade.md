@@ -1,6 +1,6 @@
 # Kế hoạch nâng cấp nền tảng — EPUB Reader
 
-> Ngày: 2026-09-20 · Trạng thái: **12/22 mục backlog đã xong và có test; 3 mục cần chủ hệ thống (mục 9); 7 mục chưa làm (EPR-14, 15, 16, 19–22).** Sự cố upload ngày 2026-09-20 ở mục 12; kế hoạch tương thích với app vBook trên điện thoại ở mục 13.
+> Ngày: 2026-09-20 · Trạng thái: **12/21 mục backlog đang theo dõi đã xong và có test (EPR-02 đã bỏ theo quyết định 2026-09-21); 2 mục cần chủ hệ thống (mục 9); 7 mục chưa làm (EPR-14, 15, 16, 19–22).** Sự cố upload ngày 2026-09-20 ở mục 12; kế hoạch tương thích với app vBook trên điện thoại ở mục 13.
 >
 > Phương pháp lấy từ `Worker_Zalo/docs/platform-upgrade/` (baseline có bằng chứng → ưu tiên P0–P3 → quyết định cần chốt → lộ trình có cổng thoát → backlog có ID → chỉ số nghiệm thu → sổ rủi ro), thu nhỏ cho dự án một người: một file thay vì tám.
 
@@ -25,7 +25,7 @@ Từ code (không cần đo): `/api/auth` không giới hạn số lần thử; 
 
 1. **Đường Cloudflare Worker: giữ nhưng coi là legacy.** Toàn bộ logic chia chunk/multipart/staging chỉ tồn tại để né giới hạn CPU của Workers Free; trên Docker không cần. Khi chắc chắn không quay lại Cloudflare thì xoá được khoảng 150 dòng và đơn giản hoá ingest thành một request.
 2. **Một người dùng.** Mật khẩu chung, không tài khoản. Nếu sau này cần nhiều người thì phải thêm `user_id` vào `books`/`progress` từ đầu, đừng vá.
-3. **Chặn truy cập: passcode + giới hạn thử (đã làm) + Cloudflare Access (khuyến nghị, cần chủ hệ thống).** Passcode một mình không đủ cho trang công khai.
+3. **Chặn truy cập: passcode + giới hạn thử (đã làm). Không dùng Cloudflare Access** — chủ hệ thống quyết định không cần (2026-09-21). Rủi ro của trang đăng nhập công khai được chấp nhận và giảm bằng giới hạn thử, thu hồi phiên, CSP và log; nếu sau này đổi ý thì đây là việc S (xem EPR-02).
 4. **Backup: cùng node là mức tối thiểu, off-site là bắt buộc thật sự.** Backup hiện tại chống được hỏng dữ liệu/xoá nhầm/nâng cấp lỗi nhưng **không** chống được mất đĩa hoặc node.
 
 ## 4. Nguyên tắc
@@ -37,12 +37,12 @@ Từ code (không cần đo): `/api/auth` không giới hạn số lần thử; 
 
 ## 5. Backlog
 
-Trạng thái: ✅ xong + có test · ⏳ cần chủ hệ thống · 🔲 chưa làm. Effort: S 1–2 giờ, M nửa ngày, L nhiều ngày.
+Trạng thái: ✅ xong + có test · ⏳ cần chủ hệ thống · 🔲 chưa làm · ⛔ đã bỏ. Effort: S 1–2 giờ, M nửa ngày, L nhiều ngày.
 
 | ID | Ưu tiên | Việc | Effort | TT | Điều kiện hoàn thành |
 |---|---|---|---|---|---|
 | EPR-01 | P0 | Giới hạn thử đăng nhập: 5 lần/15 phút/client + trần toàn cục 60 | S | ✅ | Lần 6 → 429 kể cả đúng mật khẩu; client khác không bị ảnh hưởng; trần toàn cục chặn được địa chỉ giả |
-| EPR-02 | P0 | Cloudflare Access trước `vs.dophamnguyen.xyz` | S | ⏳ | Trang đăng nhập không tải được khi chưa qua Access |
+| EPR-02 | P0 | ~~Cloudflare Access trước `vs.dophamnguyen.xyz`~~ **Bỏ** theo quyết định của chủ hệ thống (2026-09-21) | S | ⛔ | Không làm; rủi ro được chấp nhận (quyết định 3). Muốn làm lại: Zero Trust → Access → Applications → thêm host, policy theo email |
 | EPR-03 | P0 | Commit SealedSecret vào git | S | ✅ | `apps/epub-reader/sealedsecret.yaml` có trong `ci-cd-platform` (commit `4b74170`) |
 | EPR-04 | P1 | CronJob backup hằng đêm (snapshot SQLite `VACUUM INTO` + mirror `objects/`, giữ 14 bản) | M | ✅ | **Diễn tập khôi phục tự động**: backup → xoá sạch dữ liệu → restore → mọi chương khớp từng byte. **Đã chạy trên volume thật của cụm (2026-09-20):** backup 3 file/38 MB; khôi phục vào thư mục tạm: `integrity_check` ok, 1 sách/2389 chương/3 file, 4 giây |
 | EPR-05 | P1 | Backup **off-site** | M | ⏳ | Bản sao nằm ngoài node/đĩa đang chạy app và đã khôi phục thử từ đó |
@@ -70,7 +70,7 @@ Sửa kèm theo: ghi tiến độ đọc cho sách không tồn tại giờ tr�
 
 | Giai đoạn | Nội dung | Cổng thoát (đo được) | TT |
 |---|---|---|---|
-| 0 – 72 giờ | EPR-01, 02, 03 | Gõ sai 5 lần → 429; trang đăng nhập không mở được khi chưa qua Access; secret có trong git | 2/3 (còn 02) |
+| 0 – 72 giờ | EPR-01, 03 (EPR-02 đã bỏ) | Gõ sai 5 lần → 429; secret có trong git | 2/2 xong |
 | Tuần 1–2 | EPR-04…10 | Diễn tập khôi phục 0 chương lệch; CI đỏ thì không sinh image; bản mới tự lên cụm | backup + khôi phục đã chứng minh trên cụm thật; còn 05, 07 |
 | Tuần 3–4 | EPR-11…14 | 0 vi phạm CSP; backup off-site đã khôi phục thử; có cảnh báo đĩa | code xong; còn 14 |
 | Sau đó | EPR-15, 16 | Theo quyết định 1 và 2 | chưa bắt đầu |
@@ -98,7 +98,7 @@ Lưu ý: diễn tập trên cụm mới kiểm tra `integrity_check`, số sách
 |---|---|---|---|
 | Mất đĩa/node `ubuntu-16gb` khi backup còn cùng node | Thấp | **Mất toàn bộ sách** | EPR-05. Giữ file `.epub` gốc ở máy cá nhân cho đến khi có off-site |
 | Mất khoá giải mã Sealed Secrets (chưa backup, đã ghi trong ARCHITECTURE.md) | Thấp | Mất khả năng tạo lại secret | Lưu lại `ACCESS_PASSCODE`; secret tạo lại được trong vài phút |
-| Trần đăng nhập toàn cục bị lợi dụng để khoá chủ | Trung bình | Chủ không đăng nhập được tối đa 15 phút | Chấp nhận (đã ghi trong code); khởi động lại pod xoá bộ đếm; Access giảm được nguồn tấn công |
+| Trần đăng nhập toàn cục bị lợi dụng để khoá chủ | Trung bình | Chủ không đăng nhập được tối đa 15 phút | Chấp nhận (đã ghi trong code); khởi động lại pod xoá bộ đếm; không có Cloudflare Access nên trang đăng nhập công khai là bề mặt tấn công chính (đã chấp nhận) |
 | `node:sqlite` vẫn ở mức "experimental" trong Node 24 | Thấp | API đổi khi nâng Node | Ghim `node:24`; test chạy trên đúng phiên bản đó ở CI |
 | Rollout dùng `Recreate` nên có vài giây gián đoạn | Chắc chắn | Thấp | Chấp nhận: SQLite chỉ có một tiến trình ghi |
 
@@ -106,9 +106,8 @@ Lưu ý: diễn tập trên cụm mới kiểm tra `integrity_check`, số sách
 
 ## 9. Việc cần chủ hệ thống làm
 
-1. **EPR-02** — Cloudflare Zero Trust → Access → Applications → thêm `vs.dophamnguyen.xyz`, policy cho email của bạn.
-2. **EPR-07** — tạo fine-grained PAT (Contents: read & write trên `Npham140201/ci-cd-platform`), lưu thành secret `CI_CD_PLATFORM_TOKEN` của repo EPUB Reader.
-3. **EPR-05** — chọn nơi đặt bản sao off-site (ví dụ kéo `/backup` sang node khác qua Tailscale bằng `rsync`, hoặc đẩy lên một bucket) rồi tôi viết bước đó.
+1. **EPR-07** — tạo fine-grained PAT (Contents: read & write trên `Npham140201/ci-cd-platform`), lưu thành secret `CI_CD_PLATFORM_TOKEN` của repo EPUB Reader.
+2. **EPR-05** — chọn nơi đặt bản sao off-site (ví dụ kéo `/backup` sang node khác qua Tailscale bằng `rsync`, hoặc đẩy lên một bucket) rồi tôi viết bước đó.
 
 ## 10. Runbook khôi phục
 
@@ -124,11 +123,10 @@ Toàn bộ quy trình này chạy tự động trong `tests/backup.test.ts` (bac
 
 ## 11. Việc còn lại — đã ghi, chưa làm (tạm hoãn theo yêu cầu 2026-09-20)
 
-Thứ tự đề xuất khi quay lại: EPR-02 → 05 → 07 → 14 → 15. EPR-16 chỉ khi quyết định 2 đổi. Nhóm tương thích vBook (mục 13) làm theo thứ tự EPR-19 → 20 → 21; EPR-22 (mục 14) độc lập, trừ hai việc dùng chung bộ ghép EPUB với EPR-19.
+Thứ tự đề xuất khi quay lại: EPR-05 → 07 → 14 → 15 (EPR-02 đã bỏ). EPR-16 chỉ khi quyết định 2 đổi. Nhóm tương thích vBook (mục 13) làm theo thứ tự EPR-19 → 20 → 21; EPR-22 (mục 14) độc lập, trừ hai việc dùng chung bộ ghép EPUB với EPR-19.
 
 | ID | Ai làm | Cần gì để bắt đầu | Việc cụ thể |
 |---|---|---|---|
-| EPR-02 | Chủ hệ thống | Không cần gì thêm | Zero Trust → Access → Applications → thêm `vs.dophamnguyen.xyz`, policy cho email của bạn. Xong thì kiểm tra `curl -I https://vs.dophamnguyen.xyz/` bị chuyển tới trang đăng nhập Access |
 | EPR-05 | Cả hai | **Chọn nơi đặt bản sao**: (a) `rsync` `/backup` sang node khác qua Tailscale (rẻ nhất, dùng hạ tầng có sẵn, cần đường SSH/khoá giữa hai node), hoặc (b) bucket (R2 / Oracle Object Storage, cần khoá truy cập), hoặc (c) một máy chủ WebDAV bạn có (EPR-22.7, mục 14) | Viết bước sao chép ra ngoài node vào CronJob; sau đó **diễn tập khôi phục từ bản sao off-site** (chưa khôi phục thử được thì chưa tính là xong) |
 | EPR-07 | Chủ hệ thống | Tạo PAT fine-grained: Contents read & write trên `Npham140201/ci-cd-platform` | Lưu thành secret `CI_CD_PLATFORM_TOKEN` của repo EPUB Reader; job `pin-image` đã viết sẵn sẽ tự chạy. Kiểm tra: push một commit → xuất hiện commit "epub-reader: image ..." trong `ci-cd-platform` |
 | EPR-14 | Tôi | **Chọn hệ thống cảnh báo** (Beszel / eBOSS_LOG / Zalo). App đã ghi log `LOW DISK` khi dưới 10% và `/healthz` trả `disk.free_pct`; đĩa của PVC là đĩa của node, và Beszel đã theo dõi đĩa host nên có thể chỉ cần đặt ngưỡng ở đó | Nối log/số liệu vào cảnh báo, thử bằng cách hạ ngưỡng tạm để thấy cảnh báo bắn |
