@@ -486,3 +486,15 @@ kbd {
   --tab-hover-bg: #121212; --input-bg: #111111; --input-border: #2a2a2a; --btn-hover-bg: #1c1c1c;
   --modal-bg: #0d0d0d; --terminal-bg: #000000; --kbd-bg: #111111; --kbd-border: #2a2a2a;
 }
+
+/* Bookmarks */
+.monaco-host .monaco-editor .bm-mark { background: #3794ff; width: 4px !important; margin-left: 6px; border-radius: 2px; }
+.bm-list { display: grid; gap: 4px; }
+.bm-row { display: flex; align-items: center; gap: 12px; padding: 8px 12px; border-radius: 4px; cursor: pointer; }
+.bm-row:hover { background: var(--list-hover); }
+.bm-info { flex: 1; min-width: 0; }
+.bm-where { font-size: 12px; color: var(--fg-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bm-snip { margin-top: 2px; font-size: 13px; color: var(--fg); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bm-del { background: none; border: none; color: var(--fg-dim); cursor: pointer; padding: 4px; border-radius: 4px; opacity: 0; }
+.bm-row:hover .bm-del { opacity: 1; }
+.bm-del:hover { color: var(--err); background: var(--hover); }

@@ -373,7 +373,8 @@ app.get("/api/books", async (c) => {
   // without opening every book.
   const { results } = await c.env.DB.prepare(
     `SELECT b.id, b.title, b.author, b.code_name, b.chapter_count, b.created_at,
-            p.chapter_idx AS progress_idx, p.scroll_ratio AS progress_ratio, p.updated_at AS last_read_at
+            p.chapter_idx AS progress_idx, p.scroll_ratio AS progress_ratio, p.updated_at AS last_read_at,
+            p.furthest_idx AS furthest_idx, p.furthest_ratio AS furthest_ratio
      FROM books b LEFT JOIN progress p ON p.book_id = b.id
      WHERE b.ingest_done = 1 OR b.ever_completed = 1 ORDER BY b.created_at DESC`,
   ).all();
@@ -648,6 +649,8 @@ app.delete("/api/books/:id", async (c) => {
     await c.env.DB.batch([
       c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
       c.env.DB.prepare(`DELETE FROM progress WHERE book_id = ?`).bind(id),
+      c.env.DB.prepare(`DELETE FROM highlights WHERE book_id = ?`).bind(id),
+      c.env.DB.prepare(`DELETE FROM bookmarks WHERE book_id = ?`).bind(id),
       c.env.DB.prepare(`DELETE FROM books WHERE id = ?`).bind(id),
     ]);
     return c.json({ ok: true });
@@ -668,7 +671,7 @@ app.get("/api/books/:id/index", async (c) => {
     `SELECT idx, title, file_name, char_count FROM chapters WHERE book_id = ? ORDER BY idx`,
   ).bind(id).all();
   const progress = await c.env.DB.prepare(
-    `SELECT chapter_idx, scroll_ratio FROM progress WHERE book_id = ?`,
+    `SELECT chapter_idx, scroll_ratio, furthest_idx, furthest_ratio, updated_at FROM progress WHERE book_id = ?`,
   ).bind(id).first();
 
   return c.json({ ...book, chapters, progress: progress ?? null });
@@ -734,21 +737,181 @@ app.post("/api/books/:id/reindex", async (c) => {
 // --- Progress ----------------------------------------------------------------
 app.post("/api/books/:id/progress", async (c) => {
   const id = c.req.param("id");
-  const body = (await c.req.json().catch(() => ({}))) as { chapter_idx?: number; scroll_ratio?: number };
+  const body = (await c.req.json().catch(() => ({}))) as { chapter_idx?: number; scroll_ratio?: number; client_ts?: number };
   const chapterIdx = Number.isFinite(body.chapter_idx) ? Math.floor(body.chapter_idx as number) : 0;
   const ratio = Number.isFinite(body.scroll_ratio) ? Math.min(1, Math.max(0, body.scroll_ratio as number)) : 0;
+  // Devices that predate client_ts send none: treat the request as "now".
+  const clientTs = clampTs(body.client_ts);
 
   const exists = await c.env.DB.prepare(`SELECT 1 AS ok FROM books WHERE id = ?`).bind(id).first();
   if (!exists) return c.json({ error: "not found" }, 404);
+  // Two rules in one row. The *current* position (used to resume) belongs to
+  // whichever device wrote last by its own clock. The *furthest* position (used
+  // for "% read") only ever moves forward, whatever order requests arrive in.
+  const ahead = `(excluded.furthest_idx > progress.furthest_idx
+    OR (excluded.furthest_idx = progress.furthest_idx AND excluded.furthest_ratio > progress.furthest_ratio))`;
   await c.env.DB.prepare(
-    `INSERT INTO progress (book_id, chapter_idx, scroll_ratio, updated_at)
-     VALUES (?, ?, ?, ?)
+    `INSERT INTO progress (book_id, chapter_idx, scroll_ratio, updated_at, furthest_idx, furthest_ratio, client_ts)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(book_id) DO UPDATE SET
-       chapter_idx = excluded.chapter_idx,
-       scroll_ratio = excluded.scroll_ratio,
-       updated_at = excluded.updated_at`,
-  ).bind(id, chapterIdx, ratio, Date.now()).run();
+       chapter_idx    = CASE WHEN excluded.client_ts >= progress.client_ts THEN excluded.chapter_idx ELSE progress.chapter_idx END,
+       scroll_ratio   = CASE WHEN excluded.client_ts >= progress.client_ts THEN excluded.scroll_ratio ELSE progress.scroll_ratio END,
+       client_ts      = MAX(excluded.client_ts, progress.client_ts),
+       updated_at     = excluded.updated_at,
+       furthest_idx   = CASE WHEN ${ahead} THEN excluded.furthest_idx ELSE progress.furthest_idx END,
+       furthest_ratio = CASE WHEN ${ahead} THEN excluded.furthest_ratio ELSE progress.furthest_ratio END`,
+  ).bind(id, chapterIdx, ratio, Date.now(), chapterIdx, ratio, clientTs).run();
 
+  return c.json({ ok: true });
+});
+
+// --- Synced reader state: settings, highlights, bookmarks ----------------------
+// Everything a reader creates lives in SQLite (backed up, follows the reader
+// across devices); the browser only keeps a cache. Conflicts: for settings and
+// highlights the newest device timestamp wins; progress has its own rule (see
+// the progress route).
+
+// A device with a wrong clock must not be able to freeze a value in the future.
+const MAX_TS_SKEW_MS = 60_000;
+function clampTs(v: unknown): number {
+  const n = typeof v === "number" && Number.isFinite(v) ? Math.floor(v) : Date.now();
+  return Math.max(0, Math.min(n, Date.now() + MAX_TS_SKEW_MS));
+}
+const isInt = (v: unknown, min: number, max: number): v is number =>
+  typeof v === "number" && Number.isInteger(v) && v >= min && v <= max;
+function safeParse(s: string): unknown {
+  try { return JSON.parse(s); } catch { return null; }
+}
+
+type SettingsMap = Record<string, { value: unknown; updated_at: number }>;
+async function readSettings(env: Env): Promise<SettingsMap> {
+  const { results } = await env.DB.prepare(`SELECT key, value, updated_at FROM settings`)
+    .all<{ key: string; value: string; updated_at: number }>();
+  const out: SettingsMap = {};
+  for (const r of results) out[r.key] = { value: safeParse(r.value), updated_at: r.updated_at };
+  return out;
+}
+
+app.get("/api/settings", async (c) => c.json({ settings: await readSettings(c.env) }));
+
+app.put("/api/settings", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as
+    | { changes?: Record<string, { value?: unknown; updated_at?: unknown }> }
+    | null;
+  const changes = body?.changes;
+  if (!changes || typeof changes !== "object") return c.json({ error: "changes required" }, 400);
+  const entries = Object.entries(changes);
+  if (entries.length > 100) return c.json({ error: "too many settings in one request" }, 400);
+
+  const stmts = [];
+  for (const [key, change] of entries) {
+    if (!/^[A-Za-z0-9_.-]{1,64}$/.test(key)) return c.json({ error: `bad setting name: ${key}` }, 400);
+    const raw = JSON.stringify(change?.value ?? null);
+    if (raw.length > 8192) return c.json({ error: `setting too large: ${key}` }, 400);
+    stmts.push(c.env.DB.prepare(
+      `INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+       WHERE excluded.updated_at >= settings.updated_at`,
+    ).bind(key, raw, clampTs(change?.updated_at)));
+  }
+  if (stmts.length) {
+    const { n } = (await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM settings`).first<{ n: number }>()) ?? { n: 0 };
+    if (n > 300) return c.json({ error: "too many stored settings" }, 400);
+    await c.env.DB.batch(stmts);
+  }
+  return c.json({ settings: await readSettings(c.env) });
+});
+
+// Highlights: the set for one chapter is replaced as a whole.
+type HighlightItem = { p: number; start: number; end: number };
+function validHighlights(items: unknown): items is HighlightItem[] {
+  return Array.isArray(items) && items.length <= 5000 && items.every((h) =>
+    h && typeof h === "object" &&
+    isInt((h as HighlightItem).p, 0, 100_000) &&
+    isInt((h as HighlightItem).start, 0, 1_000_000) &&
+    isInt((h as HighlightItem).end, 1, 1_000_000) &&
+    (h as HighlightItem).end > (h as HighlightItem).start);
+}
+
+app.get("/api/books/:id/highlights", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT chapter_idx, items, updated_at FROM highlights WHERE book_id = ?`,
+  ).bind(c.req.param("id")).all<{ chapter_idx: number; items: string; updated_at: number }>();
+  const chapters: Record<string, { items: unknown; updated_at: number }> = {};
+  for (const r of results) chapters[String(r.chapter_idx)] = { items: safeParse(r.items) ?? [], updated_at: r.updated_at };
+  return c.json({ chapters });
+});
+
+app.put("/api/books/:id/chapters/:idx/highlights", async (c) => {
+  const id = c.req.param("id");
+  const idx = Number(c.req.param("idx"));
+  if (!isInt(idx, 0, 100_000)) return c.json({ error: "bad chapter" }, 400);
+  const body = (await c.req.json().catch(() => null)) as { items?: unknown; updated_at?: unknown } | null;
+  if (!body || !validHighlights(body.items)) return c.json({ error: "bad highlights" }, 400);
+  const exists = await c.env.DB.prepare(`SELECT 1 AS ok FROM books WHERE id = ?`).bind(id).first();
+  if (!exists) return c.json({ error: "not found" }, 404);
+
+  await c.env.DB.prepare(
+    `INSERT INTO highlights (book_id, chapter_idx, items, updated_at) VALUES (?, ?, ?, ?)
+     ON CONFLICT(book_id, chapter_idx) DO UPDATE SET items = excluded.items, updated_at = excluded.updated_at
+     WHERE excluded.updated_at >= highlights.updated_at`,
+  ).bind(id, idx, JSON.stringify(body.items), clampTs(body.updated_at)).run();
+  const cur = await c.env.DB.prepare(`SELECT items, updated_at FROM highlights WHERE book_id = ? AND chapter_idx = ?`)
+    .bind(id, idx).first<{ items: string; updated_at: number }>();
+  return c.json({ ok: true, items: cur ? safeParse(cur.items) : [], updated_at: cur?.updated_at ?? 0 });
+});
+
+// Bookmarks (a paragraph in a chapter, plus a short snippet to recognise it by).
+app.get("/api/bookmarks", async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT id, book_id, chapter_idx, p, snippet, note, created_at FROM bookmarks ORDER BY created_at DESC LIMIT 2000`,
+  ).all();
+  return c.json({ bookmarks: results });
+});
+
+app.post("/api/books/:id/bookmarks", async (c) => {
+  const id = c.req.param("id");
+  const body = (await c.req.json().catch(() => null)) as
+    | { chapter_idx?: unknown; p?: unknown; snippet?: unknown; note?: unknown }
+    | null;
+  if (!body || !isInt(body.chapter_idx, 0, 100_000) || !isInt(body.p, 0, 100_000)) return c.json({ error: "bad bookmark" }, 400);
+  const exists = await c.env.DB.prepare(`SELECT 1 AS ok FROM books WHERE id = ?`).bind(id).first();
+  if (!exists) return c.json({ error: "not found" }, 404);
+
+  // One bookmark per paragraph: asking again returns the existing one.
+  const dup = await c.env.DB.prepare(
+    `SELECT id, book_id, chapter_idx, p, snippet, note, created_at FROM bookmarks WHERE book_id = ? AND chapter_idx = ? AND p = ?`,
+  ).bind(id, body.chapter_idx, body.p).first();
+  if (dup) return c.json({ bookmark: dup });
+  const { n } = (await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM bookmarks`).first<{ n: number }>()) ?? { n: 0 };
+  if (n >= 5000) return c.json({ error: "too many bookmarks" }, 400);
+
+  const bookmark = {
+    id: crypto.randomUUID(),
+    book_id: id,
+    chapter_idx: body.chapter_idx,
+    p: body.p,
+    snippet: typeof body.snippet === "string" ? body.snippet.slice(0, 120) : "",
+    note: typeof body.note === "string" ? body.note.slice(0, 500) : "",
+    created_at: Date.now(),
+  };
+  await c.env.DB.prepare(
+    `INSERT INTO bookmarks (id, book_id, chapter_idx, p, snippet, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  ).bind(bookmark.id, bookmark.book_id, bookmark.chapter_idx, bookmark.p, bookmark.snippet, bookmark.note, bookmark.created_at).run();
+  return c.json({ bookmark });
+});
+
+app.put("/api/bookmarks/:bid", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { note?: unknown } | null;
+  if (!body || typeof body.note !== "string") return c.json({ error: "note required" }, 400);
+  const res = await c.env.DB.prepare(`UPDATE bookmarks SET note = ? WHERE id = ?`).bind(body.note.slice(0, 500), c.req.param("bid")).run();
+  if (!res.meta.changes) return c.json({ error: "not found" }, 404);
+  return c.json({ ok: true });
+});
+
+app.delete("/api/bookmarks/:bid", async (c) => {
+  const res = await c.env.DB.prepare(`DELETE FROM bookmarks WHERE id = ?`).bind(c.req.param("bid")).run();
+  if (!res.meta.changes) return c.json({ error: "not found" }, 404);
   return c.json({ ok: true });
 });
 

@@ -247,6 +247,7 @@ function loadHighlights(bookId, idx) {
 function saveHighlights() {
   if (!state.current) return;
   localStorage.setItem(hlKey(state.current.bookId, state.current.idx), JSON.stringify(state.hl));
+  if (typeof syncHighlightsSoon === "function") syncHighlightsSoon(state.current.bookId, state.current.idx);
 }
 function paintHighlights() {
   const ed = reader.ed;
@@ -316,7 +317,10 @@ function loadSettings() {
     librarySort: s.librarySort || "recent",
   };
 }
-function saveSettings() { localStorage.setItem("devdocs.settings", JSON.stringify(state.settings)); }
+function saveSettings() {
+  localStorage.setItem("devdocs.settings", JSON.stringify(state.settings));
+  if (typeof syncSettingsSoon === "function") syncSettingsSoon();
+}
 function saveSession() {
   localStorage.setItem("devdocs.session", JSON.stringify({ tabs: state.tabs, activeKey: state.activeKey }));
 }
@@ -342,6 +346,7 @@ async function boot() {
   renderTree();
   const warm = () => ensureMonaco().catch(() => {});
   if ("requestIdleCallback" in window) requestIdleCallback(warm); else setTimeout(warm, 1500);
+  if (typeof syncBoot === "function") syncBoot();
 }
 
 function showLogin() {
@@ -430,6 +435,8 @@ async function loadBookIndex(book) {
   book._progress = data.progress || null;
   if (data.code_name) book.code_name = data.code_name;
   if (data.title) book.title = data.title.normalize("NFC");
+  if (data.progress && data.progress.furthest_idx != null) book._furthest = { idx: data.progress.furthest_idx, ratio: data.progress.furthest_ratio || 0 };
+  if (typeof syncBookHighlights === "function") syncBookHighlights(book.id);
   return true;
 }
 
@@ -774,8 +781,17 @@ function restoreScroll(key, book, idx) {
     // then save that over the real position) until it has caught up.
     if (top === 0 && wantRatio > 0 && view.max === 0 && tries++ < 20) { requestAnimationFrame(apply); return; }
     view.top = top;
+    if (state.reveal && state.reveal.key === key) {
+      const ln = reader.paraLine[state.reveal.p];
+      if (ln) reader.ed.revealLineInCenter(ln);
+      state.reveal = null;
+    }
     updatePos();
     paintFocus();
+    // Opening a chapter is itself progress (other devices resume from it), even
+    // if the reader never scrolls.
+    clearTimeout(state.saveTimer);
+    state.saveTimer = setTimeout(() => saveProgress(view.ratio), 700);
   };
   requestAnimationFrame(apply);
 }
@@ -785,19 +801,25 @@ function updatePos() {
   $("#st-pos").textContent = `Ln ${r ? r.startLineNumber : 1}, Col 1  ${Math.round(view.ratio * 100)}%`;
 }
 
+// "% read" uses the furthest point reached, which only ever moves forward.
+function noteFurthest(book, idx, ratio) {
+  if (!book) return;
+  const f = book._furthest || (book.furthest_idx != null ? { idx: book.furthest_idx, ratio: book.furthest_ratio || 0 } : null);
+  if (!f || idx > f.idx || (idx === f.idx && ratio > f.ratio)) book._furthest = { idx, ratio };
+}
 async function saveProgress(ratio) {
   if (!state.current) return;
   const book = state.current.book;
-  if (book) { book._progress = { chapter_idx: state.current.idx, scroll_ratio: ratio }; book.last_read_at = Date.now(); }
+  if (book) { book._progress = { chapter_idx: state.current.idx, scroll_ratio: ratio }; book.last_read_at = Date.now(); noteFurthest(book, state.current.idx, ratio); }
   api(`/api/books/${state.current.bookId}/progress`, {
     method: "POST",
-    body: JSON.stringify({ chapter_idx: state.current.idx, scroll_ratio: ratio }),
+    body: JSON.stringify({ chapter_idx: state.current.idx, scroll_ratio: ratio, client_ts: Date.now() }),
   }).catch(() => {});
 }
 function beaconProgress() {
   if (!state.current) return;
   const ratio = view.ratio;
-  const body = JSON.stringify({ chapter_idx: state.current.idx, scroll_ratio: ratio });
+  const body = JSON.stringify({ chapter_idx: state.current.idx, scroll_ratio: ratio, client_ts: Date.now() });
   try { navigator.sendBeacon(`/api/books/${state.current.bookId}/progress`, new Blob([body], { type: "application/json" })); } catch {}
 }
 document.addEventListener("visibilitychange", () => {
@@ -1125,6 +1147,7 @@ document.addEventListener("keydown", (e) => {
   }
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.altKey && e.key.toLowerCase() === "t") { e.preventDefault(); toggleReveal(); }
+  else if (mod && e.altKey && e.key.toLowerCase() === "k") { e.preventDefault(); if (typeof addBookmarkAtReading === "function") addBookmarkAtReading(); }
   else if (mod && e.key.toLowerCase() === "b") { e.preventDefault(); toggleSidebar(); }
   else if (mod && e.shiftKey && e.key.toLowerCase() === "u") { e.preventDefault(); openUpload(); }
   else if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); changeFont(1); }

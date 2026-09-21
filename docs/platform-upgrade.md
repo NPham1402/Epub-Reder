@@ -364,3 +364,27 @@ Theo yêu cầu, vùng đọc giờ là **Monaco** (lõi editor của VS Code, M
 - Chưa thử trên tunnel thật: tải lần đầu ~0,7 MB nén.
 - Màu theme của Monaco đọc từ biến CSS lúc khởi tạo; khi làm EPR-22.11 (đổi theme) phải gọi `defineTheme` + `setTheme` lại.
 - Monaco chạy chỉ với đường Node/Docker và Worker (đã thêm bước build); các tính năng ở mục 14 (Extensions, bản đồ nhiệt…) chưa động tới.
+
+### 14.10 Tiến độ thực hiện EPR-22 (cập nhật liên tục)
+
+Làm trên nhánh `feat/extensions`, từng giai đoạn một commit. Bằng chứng nằm ở các bài kiểm tra trình duyệt trong `tests/ui/` (xem `tests/ui/README.md`) và test server trong `tests/`.
+
+| Việc | Trạng thái | Ghi chú |
+|---|---|---|
+| **22.12** khung Extensions | ✅ | View Extensions (lọc, danh sách, bánh răng Enable/Disable), tab `Extension: <tên>` (lưu trong session), icon Search/Source Control/Run mở view rỗng như VS Code, bấm icon đang mở thì thu gọn sidebar. Layout mặc định không đổi (17 phần tử × 3 cỡ cửa sổ). |
+| **22.9** Library | ✅ | Sắp xếp (đọc gần nhất / mới thêm / tên / tiến độ), % theo **điểm xa nhất**, mở sách đúng chỗ đang đọc. Explorer không đổi. |
+| **22.4** Focus Timer | ✅ | Mặc định tắt; khi bật: mục "N min left" ở status bar + nhắc nghỉ dạng toast; toast ẩn khi boss key; tắt thì gỡ sạch. |
+| **22.11** Color Themes | ✅ | Dark+, Light+, Monokai, AMOLED; đổi cả editor Monaco lẫn màn hình che; tắt extension thì về Dark+. |
+| **22.10** tải trước chương | ✅ (đã có) | Chỉ thêm: không tải khi tab ẩn / đang boss key. |
+| **22.1** đồng bộ | ✅ | Bảng `settings`, `highlights`; `progress` thêm `furthest_*` (chỉ tiến) và `client_ts` (vị trí hiện tại theo đồng hồ thiết bị mới nhất, đồng hồ lệch bị chặn ở +60 s). Client: cache ở `localStorage`, đẩy nền, hàng đợi thử lại; máy chưa từng đồng bộ thì **gộp** highlight cũ chứ không ghi đè. Mở chương cũng tính là tiến độ. |
+| **22.6** Bookmarks | ✅ | Mặc định tắt; `Ctrl+Alt+K` đánh dấu đoạn đang đọc, thanh xanh cạnh số dòng, trang liệt kê, bấm để nhảy đúng đoạn, xoá. Lưu ở server nên máy nào cũng thấy. |
+| Sync & Backup (trang) | ✅ | Trạng thái, lần đồng bộ cuối, việc chờ đẩy, "Sync now". |
+| **22.3** Activity Insights | 🔲 | Giai đoạn C |
+| **22.0** bộ ghép EPUB, **22.2** nhập TXT, **22.8** xuất sách | 🔲 | Giai đoạn C |
+| **22.5** tìm kiếm toàn văn, **22.7** sao lưu WebDAV | 🔲 | Giai đoạn D (22.7 chờ máy chủ WebDAV) |
+
+Kiểm chứng giai đoạn A+B: `npm test` 40/40 (thêm 8 test đồng bộ và 1 test tiến độ trong danh sách); trình duyệt thật: 17 (đọc) + 33 (Extensions) + 20 (hai thiết bị) kiểm tra, không lỗi console.
+
+Khuyết điểm có từ trước được sửa trong lúc làm: mở một chương mà không cuộn thì vị trí "hiện tại" **không được lưu** (chỉ lưu khi có sự kiện cuộn), nên máy khác không biết bạn đã chuyển chương.
+
+Hạn chế đã biết: đồng bộ cài đặt dùng "mới hơn thắng" theo **từng khoá**, nên `extensions` (danh sách bật/tắt) được thay cả khối; đồng hồ giữa các máy có thể lệch nhau vài giây. Highlight cũ chỉ được nhập lên server khi mở đúng cuốn sách đó lần đầu.

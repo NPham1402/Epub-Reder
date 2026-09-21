@@ -57,6 +57,7 @@ function clearToasts() { $("#toasts").innerHTML = ""; }
 function onExtEvent(name) {
   if (name === "panic") $("#toasts").hidden = panicVisible;
   if ((name === "chapter" || name === "scroll") && extEnabled("focus-timer")) updateTimerStatus();
+  if (name === "chapter" && typeof bmOnChapter === "function") bmOnChapter();
 }
 
 /* ---- Side bar views ---------------------------------------------------------- */
@@ -189,7 +190,10 @@ function renderExtPage(d, page) {
 
 /* ============================ Library ======================================= */
 function bookPercent(b) {
-  const p = b._progress || (b.progress_idx != null ? { chapter_idx: b.progress_idx, scroll_ratio: b.progress_ratio || 0 } : null);
+  // The furthest point reached, which never goes backwards; the resume position can.
+  const f = b._furthest || (b.furthest_idx != null ? { idx: b.furthest_idx, ratio: b.furthest_ratio || 0 } : null);
+  const p = f ? { chapter_idx: f.idx, scroll_ratio: f.ratio }
+    : b._progress || (b.progress_idx != null ? { chapter_idx: b.progress_idx, scroll_ratio: b.progress_ratio || 0 } : null);
   if (!p || !b.chapter_count) return 0;
   return Math.min(1, ((p.chapter_idx || 0) + (p.scroll_ratio || 0)) / b.chapter_count);
 }
