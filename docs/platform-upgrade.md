@@ -302,3 +302,24 @@ Phụ thuộc: 22.6 cần 22.1; 22.3 dùng bộ đếm của 22.4; 22.2 và 22.8
 | Migration sai trên dữ liệu thật | Chỉ thêm cột/bảng; đã có backup hằng đêm và runbook khôi phục; thử migration trên bản restore trước |
 | FTS5 làm đầy đĩa hoặc chậm khi ingest | Đo trước; lập chỉ mục sau khi ingest xong (không chặn upload); cho tắt theo từng sách |
 | Regex nhận sai chương ở file TXT lạ | Luôn có bản xem trước, chia theo độ dài làm phương án dự phòng |
+
+### 14.8 Ràng buộc: không phá layout VS Code
+
+Layout hiện có 5 vùng cố định: thanh tiêu đề, activity bar (48 px), sidebar (240 px, tối thiểu 170 px), nhóm editor (tab + breadcrumb + nội dung + minimap 70 px) và status bar. Chưa có panel phía dưới, và chưa có `@media` nào (chưa hỗ trợ màn hình điện thoại). **Không việc nào ở mục 14 được đổi kích thước hay vị trí của các vùng này**; mỗi tính năng chỉ được đặt vào một chỗ mà VS Code thật cũng có:
+
+| Việc | Chỗ đặt | Lưu ý |
+|---|---|---|
+| 22.10, 22.1, 22.7 | Không có giao diện (icon `sync` ở status bar có sẵn có thể báo trạng thái đồng bộ) | — |
+| 22.9 Kệ sách | Nhãn % mờ, căn phải cạnh tên trong cây Explorer (như trang trí của Git); nút sắp xếp nhỏ cạnh tiêu đề "Workspace" | Tên dài phải cắt bằng dấu "…", không được đẩy rộng sidebar |
+| 22.4 Nhắc nghỉ | Một mục mới ở status bar; nhắc bằng toast góc dưới phải (chỗ của thông báo VS Code) | Toast phải có `z-index` **thấp hơn** màn boss key (100) và **ẩn khi đang boss key** |
+| 22.11 Theme | Chỉ đổi biến màu | Màn boss key đổi theo theme |
+| 22.6 Bookmark | Một mục thu gọn được dưới "Workspace" trong sidebar (như "Outline"), mặc định thu gọn | Không làm sidebar dài hơn khi thu gọn |
+| 22.5 Tìm kiếm | View Search trong **cùng** sidebar khi bấm icon Search (đúng cách VS Code hoạt động); bấm kết quả mở tab | Kết quả cắt chữ trong 240 px |
+| 22.3 Thống kê | Lưới 53 tuần **không vừa** sidebar 240 px → mở thành **một tab trong editor** (như tab "Settings"/"Release Notes"); sidebar chỉ hiện tóm tắt | Cần một loại tab đặc biệt vì tab hiện gắn với (sách, chương); đây là chỗ đụng vào code tab, không phải layout |
+| 22.2 Nhập TXT, 22.8 Xuất | Dùng lại hộp thoại Import có sẵn (nới `accept`, thêm bản xem trước); xuất bằng menu chuột phải/nút nhỏ trên mục sách | Không thêm vùng mới |
+
+Phần bấm icon: hiện chỉ Explorer thật; Search và Source Control là trang trí. Khi hai icon này có việc thật thì Run và Extensions nên hiện một view rỗng ("No extensions installed") để cả bốn cùng phản ứng như VS Code thật.
+
+Phím tắt mới chỉ dùng tổ hợp có phím bổ trợ; **không dùng phím chữ trơn**, vì W/S/A/D đang để cuộn/chuyển chương và chuỗi mở khoá boss key nhận phím chữ.
+
+**Cổng kiểm tra bắt buộc cho mọi giai đoạn:** trước khi làm, Playwright đo hộp bao (bounding box) của 5 vùng ở 3 cỡ cửa sổ (1920×1080, 1366×768, 1024×700) ở trạng thái mặc định và lưu lại; sau mỗi giai đoạn đo lại và **so khớp từng pixel về kích thước/vị trí** (nội dung trong vùng được đổi, khung vùng thì không), kèm ảnh chụp ở chế độ thường và chế độ boss key để xem bằng mắt.
