@@ -625,6 +625,7 @@ function renderTabs() {
 function renderBreadcrumbs() {
   const bc = $("#breadcrumbs");
   bc.innerHTML = "";
+  if (isExtKey(state.activeKey) && typeof extCrumb === "function") { extCrumb(bc, state.activeKey.slice(4)); return; }
   if (!state.current) return;
   const ch = chapterOf(state.current.bookId, state.current.idx);
   const book = bookById(state.current.bookId);
@@ -906,7 +907,7 @@ async function zipProblem(file) {
 // long to deliver its body, and on a slow or flaky link a big file blows past
 // that and arrives truncated. Small parts each finish in seconds, can be
 // retried on their own, and give real progress. Returns {ok, book} | {ok:false, error}.
-async function uploadInParts(file, { onProgress, onFinishing }) {
+async function uploadInParts(file, { onProgress, onFinishing, dry = false }) {
   const CONCURRENCY = 3;
   const MAX_TRIES = 6;
 
@@ -945,10 +946,10 @@ async function uploadInParts(file, { onProgress, onFinishing }) {
 
   onFinishing();
   for (let attempt = 1; attempt <= 4; attempt++) {
-    const res = await api(`/api/uploads/${id}/complete`, { method: "POST" }).catch(() => null);
+    const res = await api(`/api/uploads/${id}/complete${dry ? "?dry=1" : ""}`, { method: "POST" }).catch(() => null);
     if (res) {
       const data = await res.json().catch(() => ({}));
-      if (res.ok) return { ok: true, book: data };
+      if (res.ok) return dry ? { ok: true, preview: data.preview, uploadId: id } : { ok: true, book: data };
       if (res.status === 409 && Array.isArray(data.missing)) {
         try { for (const n of data.missing) await sendPart(n); } catch (e) { return { ok: false, error: e.message }; }
         continue;
@@ -960,13 +961,70 @@ async function uploadInParts(file, { onProgress, onFinishing }) {
   return { ok: false, error: "the upload was sent but could not be finished — check the connection and retry" };
 }
 
+// Text files: the server cuts them into chapters and reports what it found
+// (a dry run); nothing is created until the reader confirms.
+const RULE_LABELS = {
+  vi: "chapter headings (Chương / Hồi …)", zh: "chapter headings (第…章)", en: "chapter headings (Chapter …)",
+  numbered: "numbered headings", length: "cut by length", single: "one piece",
+};
+let pendingPreview = null;
+new MutationObserver(() => { if ($("#upload").hidden && pendingPreview) pendingPreview(false); })
+  .observe($("#upload"), { attributes: true, attributeFilter: ["hidden"] });
+function showTextPreview(preview) {
+  return new Promise((resolve) => {
+    const box = $("#upload-preview");
+    box.innerHTML = "";
+    box.hidden = false;
+    const done = (yes) => { pendingPreview = null; box.hidden = true; resolve(yes); };
+    pendingPreview = done;
+    box.appendChild(el("div", "up-title", `${preview.chapters} file${preview.chapters === 1 ? "" : "s"} found`));
+    box.appendChild(el("div", "up-sub", `${preview.title} · ${preview.chars.toLocaleString()} characters · ${RULE_LABELS[preview.rule] || preview.rule}`));
+    const list = el("div", "up-list");
+    let prev = 0;
+    for (const s of preview.samples) {
+      if (prev && s.n > prev + 1) list.appendChild(el("div", "up-gap", "…"));
+      const row = el("div", "up-row");
+      row.appendChild(el("span", "up-n", String(s.n)));
+      row.appendChild(el("span", "up-t", s.title || "(untitled)"));
+      row.appendChild(el("span", "up-c", s.chars.toLocaleString()));
+      list.appendChild(row);
+      prev = s.n;
+    }
+    box.appendChild(list);
+    for (const w of preview.warnings) box.appendChild(el("div", "up-warn", "! " + w));
+    const btns = el("div", "up-btns");
+    const yes = el("button", "xp-btn", "Import");
+    const no = el("button", "xp-btn secondary", "Cancel");
+    yes.type = no.type = "button";
+    yes.addEventListener("click", () => done(true));
+    no.addEventListener("click", () => done(false));
+    btns.appendChild(yes);
+    btns.appendChild(no);
+    box.appendChild(btns);
+  });
+}
+async function finishUpload(uploadId) {
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const res = await api(`/api/uploads/${uploadId}/complete`, { method: "POST" }).catch(() => null);
+    if (res) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) return { ok: true, book: data };
+      if (res.status < 500 && res.status !== 429) return { ok: false, error: data.error || `HTTP ${res.status}` };
+    }
+    await sleep(1000 * attempt);
+  }
+  return { ok: false, error: "the import could not be finished — check the connection and retry" };
+}
+
 async function uploadFile(file) {
   const status = $("#upload-status");
   status.hidden = false;
   status.classList.remove("err");
+  $("#upload-preview").hidden = true;
   const mb = (n) => (n / 1048576).toFixed(1);
+  const isText = /\.(txt|text|html?|xhtml)$/i.test(file.name);
 
-  const problem = await zipProblem(file);
+  const problem = isText ? null : await zipProblem(file);
   if (problem) {
     status.classList.add("err");
     status.textContent = `! ${problem} (${mb(file.size)} MB)`;
@@ -979,13 +1037,30 @@ async function uploadFile(file) {
       status.textContent = `> uploading ${file.name} … ${Math.floor((done / file.size) * 100)}% (${mb(done)} / ${mb(file.size)} MB)`;
     },
     onFinishing: () => { status.textContent = `> parsing ${file.name} …`; },
+    dry: isText,
   });
   if (!up.ok) {
     status.classList.add("err");
     status.textContent = `! ${up.error}`;
     return;
   }
-  const data = up.book;
+  let data = up.book;
+  if (isText) {
+    status.textContent = `> ${file.name}: choose what to import`;
+    if (!(await showTextPreview(up.preview))) {
+      api(`/api/uploads/${up.uploadId}`, { method: "DELETE" }).catch(() => {});
+      status.textContent = "> import cancelled";
+      return;
+    }
+    status.textContent = `> importing ${file.name} …`;
+    const fin = await finishUpload(up.uploadId);
+    if (!fin.ok) {
+      status.classList.add("err");
+      status.textContent = `! ${fin.error}`;
+      return;
+    }
+    data = fin.book;
+  }
 
   const result = await ingestChapters(data.id, (processed, total) => {
     status.textContent = `> indexing "${data.code_name}" … ${processed}/${total}`;
@@ -1076,6 +1151,8 @@ function toggleReveal() {
   $("#st-reveal").hidden = !state.revealTitles;
   $("#btn-reveal").classList.toggle("on", state.revealTitles);
   renderTree(); renderTabs(); renderBreadcrumbs(); updateStatusFile();
+  // An open extension page may show module names or links that depend on this.
+  if (isExtKey(state.activeKey) && typeof refreshExtPage === "function") refreshExtPage(state.activeKey.slice(4));
 }
 $("#btn-reveal").addEventListener("click", toggleReveal);
 

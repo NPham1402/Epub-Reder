@@ -159,16 +159,17 @@
     <div id="upload" class="modal-backdrop" hidden>
       <div class="modal upload">
         <div class="modal-head">
-          <span>Import module (.epub)</span>
+          <span>Import module (.epub, .txt)</span>
           <button class="modal-close ico" data-icon="close" data-close="upload"></button>
         </div>
         <label id="dropzone" class="dropzone">
-          <input id="file-input" type="file" accept=".epub,application/epub+zip" hidden />
+          <input id="file-input" type="file" accept=".epub,.txt,.text,.html,.htm,application/epub+zip,text/plain,text/html" hidden />
           <div class="dz-icon ico" data-icon="import"></div>
-          <div>Drop an <b>.epub</b> file here or click to browse</div>
+          <div>Drop an <b>.epub</b> (or <b>.txt</b> / <b>.html</b>) file here or click to browse</div>
           <div class="dz-hint">It will be parsed and indexed as a documentation module.</div>
         </label>
         <div id="upload-status" class="upload-status" hidden></div>
+        <div id="upload-preview" class="upload-preview" hidden></div>
       </div>
     </div>
 

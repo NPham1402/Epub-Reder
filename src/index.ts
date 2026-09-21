@@ -4,6 +4,9 @@ import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
 import type { Env } from "./types";
 import { parseEpubMeta, extractChapterRange, EpubLimitError, type SpineItem } from "./epub";
+import { buildEpub, buildText } from "./epubwrite";
+import { readBlocks } from "./chapters";
+import { decodeText, htmlToText, splitChapters } from "./textsplit";
 import { fakeCodeName, fakeFileName } from "./names";
 import { passcodeMatches, signSession, verifySession } from "./auth";
 import { FailureLimiter } from "./ratelimit";
@@ -469,7 +472,25 @@ app.post("/api/uploads", async (c) => {
   return c.json({ id, part_size: UPLOAD_PART_BYTES, parts: Math.ceil(size / UPLOAD_PART_BYTES) });
 });
 
-interface UploadRow { size: number; part_size: number; book_id: string | null }
+const TEXT_NAME_RE = /\.(txt|text|html?|xhtml)$/i;
+function convertTextUpload(bytes: Uint8Array, name: string) {
+  let text = decodeText(bytes);
+  if (/\.(html?|xhtml)$/i.test(name)) text = htmlToText(text);
+  const title = name.replace(/\.[^.]+$/, "").trim() || "Untitled";
+  const split = splitChapters(text, { fallbackTitle: title });
+  const sizeOf = (c: { paragraphs: string[] }) => c.paragraphs.join("").length;
+  const samples = split.chapters.map((c, i) => ({ n: i + 1, title: c.title, chars: sizeOf(c) }));
+  const preview = {
+    title, rule: split.rule, chapters: split.chapters.length, chars: split.chars, warnings: split.warnings,
+    samples: samples.length > 14 ? [...samples.slice(0, 10), ...samples.slice(-3)] : samples,
+  };
+  const epub = split.chapters.length
+    ? buildEpub({ title, chapters: split.chapters.map((c) => ({ title: c.title, blocks: c.paragraphs.map((p) => ({ type: "p", text: p })) })) })
+    : new Uint8Array();
+  return { preview, epub };
+}
+
+interface UploadRow { size: number; part_size: number; book_id: string | null; name?: string | null }
 
 app.put("/api/uploads/:id/parts/:n", async (c) => {
   const id = c.req.param("id");
@@ -488,13 +509,20 @@ app.put("/api/uploads/:id/parts/:n", async (c) => {
   return c.json({ ok: true });
 });
 
+app.delete("/api/uploads/:id", async (c) => {
+  const id = c.req.param("id");
+  await discardUploadParts(c.env, id);
+  await c.env.DB.prepare(`DELETE FROM uploads WHERE id = ? AND book_id IS NULL`).bind(id).run();
+  return c.json({ ok: true });
+});
+
 app.post("/api/uploads/:id/complete", async (c) => {
   const id = c.req.param("id");
   const lock = `upload:${id}`;
   if (busyBooks.has(lock)) return c.json({ error: "this upload is already being completed" }, 409);
   busyBooks.add(lock);
   try {
-    const up = await c.env.DB.prepare(`SELECT size, part_size, book_id FROM uploads WHERE id = ?`)
+    const up = await c.env.DB.prepare(`SELECT size, part_size, book_id, name FROM uploads WHERE id = ?`)
       .bind(id).first<UploadRow>();
     if (!up) return c.json({ error: "not found" }, 404);
 
@@ -526,7 +554,21 @@ app.post("/api/uploads/:id/complete", async (c) => {
     }
     if (pos !== up.size) return c.json({ error: "assembled size does not match" }, 400);
 
-    const r = await createBookFromBytes(c.env, bytes);
+    // A .txt/.html file is cut into chapters and wrapped as an EPUB, then goes
+    // through the same pipeline as any book. ?dry=1 only reports what it would
+    // do (parts stay, so the real import needs no second upload).
+    let source: Uint8Array = bytes;
+    if (TEXT_NAME_RE.test(up.name ?? "")) {
+      const conv = convertTextUpload(bytes, up.name ?? "");
+      if (!conv.preview.chapters) {
+        await discardUploadParts(c.env, id);
+        await c.env.DB.prepare(`DELETE FROM uploads WHERE id = ?`).bind(id).run();
+        return c.json({ error: "could not find any text in this file" }, 422);
+      }
+      if (c.req.query("dry") === "1") return c.json({ preview: conv.preview });
+      source = conv.epub;
+    }
+    const r = await createBookFromBytes(c.env, source);
     await discardUploadParts(c.env, id);
     if (r.status === 200) {
       await c.env.DB.prepare(`UPDATE uploads SET book_id = ? WHERE id = ?`).bind(r.body.id as string, id).run();
@@ -695,16 +737,7 @@ app.get("/api/books/:id/chapters/:idx", async (c) => {
   }>();
   if (!row) return c.json({ error: "not found" }, 404);
 
-  let blocks: unknown[] = [];
-  if (row.byte_offset != null && row.byte_length != null && row.byte_length > 0) {
-    const obj = await c.env.BOOKS.get(contentBinKey(id), {
-      range: { offset: row.byte_offset, length: row.byte_length },
-    });
-    if (obj) { try { blocks = JSON.parse(await obj.text()); } catch {} }
-  } else if (row.blocks) {
-    // Fallback for a book still stored in the earlier per-row D1 format.
-    try { blocks = JSON.parse(row.blocks); } catch {}
-  }
+  const blocks = await readBlocks(c.env, id, row);
   return c.json({ idx: row.idx, title: row.title, file_name: row.file_name, blocks });
 });
 
@@ -951,6 +984,43 @@ app.get("/api/stats", async (c) => {
     c.env.DB.prepare(`SELECT book_id, SUM(seconds) AS seconds FROM reading_hourly WHERE day >= ? GROUP BY book_id ORDER BY seconds DESC LIMIT 20`).bind(since).all(),
   ]);
   return c.json({ since, daily: daily.results, hourly: hourly.results, per_book: perBook.results });
+});
+
+// --- Export a book as EPUB or plain text ----------------------------------------
+// The original file is not kept (only parsed text), so the EPUB is rebuilt from
+// the stored chapters. The file is named after the module's disguise name unless
+// ?real=1 asks for the real title.
+app.get("/api/books/:id/export", async (c) => {
+  const id = c.req.param("id");
+  const format = c.req.query("format");
+  if (format !== "epub" && format !== "txt") return c.json({ error: "format must be epub or txt" }, 400);
+  const book = await c.env.DB.prepare(
+    `SELECT title, author, language, code_name, chapter_count, ingest_done FROM books WHERE id = ?`,
+  ).bind(id).first<{ title: string; author: string | null; language: string | null; code_name: string; chapter_count: number; ingest_done: number }>();
+  if (!book) return c.json({ error: "not found" }, 404);
+  if (!book.ingest_done) return c.json({ error: "book is being indexed" }, 409);
+
+  const last = Math.max(0, book.chapter_count - 1);
+  const from = Math.min(last, Math.max(0, Math.floor(Number(c.req.query("from"))) || 0));
+  const to = Math.min(last, Math.max(from, Number.isFinite(Number(c.req.query("to"))) && c.req.query("to") ? Math.floor(Number(c.req.query("to"))) : last));
+  const { results: rows } = await c.env.DB.prepare(
+    `SELECT idx, title, file_name, byte_offset, byte_length, blocks FROM chapters WHERE book_id = ? AND idx BETWEEN ? AND ? ORDER BY idx`,
+  ).bind(id, from, to).all<{ idx: number; title: string | null; file_name: string; byte_offset: number | null; byte_length: number | null; blocks: string | null }>();
+  if (!rows.length) return c.json({ error: "no chapters in that range" }, 404);
+
+  const chapters = [];
+  for (const r of rows) chapters.push({ title: r.title || r.file_name, blocks: await readBlocks(c.env, id, r) });
+  const input = { title: book.title, author: book.author, language: book.language, chapters };
+
+  const real = c.req.query("real") === "1";
+  const base = (real ? book.title : book.code_name).replace(/[\\/:*?"<>|\u0000-\u001F]/g, "_").trim().slice(0, 100) || "book";
+  const name = `${base}.${format}`;
+  const headers = {
+    "content-disposition": `attachment; filename="${name.replace(/[^A-Za-z0-9._-]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+    "content-type": format === "epub" ? "application/epub+zip" : "text/plain; charset=utf-8",
+  };
+  if (format === "txt") return new Response(buildText(input), { headers });
+  return new Response(buildEpub(input) as unknown as BodyInit, { headers });
 });
 
 // --- Static assets fallback --------------------------------------------------

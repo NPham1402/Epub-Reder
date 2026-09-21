@@ -151,16 +151,20 @@ async function activateExt(id) {
   renderExtPage(d, page);
   renderTabs();
   renderTree();
-  const bc = $("#breadcrumbs");
-  bc.innerHTML = "";
-  const crumb = el("span", "crumb");
-  crumb.appendChild(el("span", codiCls("extensions")));
-  crumb.appendChild(el("span", null, "Extension: " + d.name));
-  bc.appendChild(crumb);
+  renderBreadcrumbs();
   $("#st-pos").textContent = "";
   document.title = `Extension: ${d.name} — devdocs`;
   if (!$("#view-extensions").hidden) renderExtList();
   saveSession();
+}
+// Breadcrumb for an extension tab (called from renderBreadcrumbs in app.js).
+function extCrumb(bc, id) {
+  const d = EXT_BY_ID[id];
+  if (!d) return;
+  const crumb = el("span", "crumb");
+  crumb.appendChild(el("span", codiCls("extensions")));
+  crumb.appendChild(el("span", null, "Extension: " + d.name));
+  bc.appendChild(crumb);
 }
 function refreshExtPage(id) {
   if (state.activeKey === extKey(id)) renderExtPage(EXT_BY_ID[id], $("#ext-page"));
@@ -216,7 +220,7 @@ registerExtension({
   name: "Library",
   version: "1.0.0",
   icon: "library",
-  description: "Sort your modules and see how far along each one is.",
+  description: "Sort your modules, see how far along each one is, and export them.",
   defaultEnabled: true,
   render(body) {
     const bar = el("div", "lib-bar");
@@ -256,6 +260,18 @@ registerExtension({
         info.appendChild(track);
         row.appendChild(info);
         row.appendChild(el("span", "lib-pct", pct + "%"));
+        const acts = el("span", "lib-acts");
+        for (const [fmt, label] of [["txt", "TXT"], ["epub", "EPUB"]]) {
+          // A plain link: the session cookie authorises the download, and the
+          // server names the file after the module unless real titles are shown.
+          const a = el("a", "lib-btn", label);
+          a.href = `/api/books/${b.id}/export?format=${fmt}${state.revealTitles ? "&real=1" : ""}`;
+          a.download = "";
+          a.title = `Export as .${fmt}`;
+          a.addEventListener("click", (e) => e.stopPropagation());
+          acts.appendChild(a);
+        }
+        row.appendChild(acts);
         row.addEventListener("click", () => openBookFromLibrary(b));
         list.appendChild(row);
       }

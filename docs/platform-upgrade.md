@@ -379,12 +379,14 @@ Làm trên nhánh `feat/extensions`, từng giai đoạn một commit. Bằng ch
 | **22.1** đồng bộ | ✅ | Bảng `settings`, `highlights`; `progress` thêm `furthest_*` (chỉ tiến) và `client_ts` (vị trí hiện tại theo đồng hồ thiết bị mới nhất, đồng hồ lệch bị chặn ở +60 s). Client: cache ở `localStorage`, đẩy nền, hàng đợi thử lại; máy chưa từng đồng bộ thì **gộp** highlight cũ chứ không ghi đè. Mở chương cũng tính là tiến độ. |
 | **22.6** Bookmarks | ✅ | Mặc định tắt; `Ctrl+Alt+K` đánh dấu đoạn đang đọc, thanh xanh cạnh số dòng, trang liệt kê, bấm để nhảy đúng đoạn, xoá. Lưu ở server nên máy nào cũng thấy. |
 | Sync & Backup (trang) | ✅ | Trạng thái, lần đồng bộ cuối, việc chờ đẩy, "Sync now". |
-| **22.3** Activity Insights | 🔲 | Giai đoạn C |
-| **22.0** bộ ghép EPUB, **22.2** nhập TXT, **22.8** xuất sách | 🔲 | Giai đoạn C |
+| **22.3** Activity Insights | ✅ | Chỉ lưu thời lượng (ngày, giờ, sách), đếm khi cửa sổ đang dùng và không ở màn hình che; lưới đóng góp 53 tuần, chuỗi ngày (≥ 1 phút/ngày), giờ vàng, module đọc nhiều nhất. Mặc định bật. Tắt thì dừng ghi. |
+| **22.0** bộ ghép EPUB | ✅ | `src/epubwrite.ts` (fflate, không phụ thuộc runtime): EPUB3 + NCX, `mimetype` đầu tiên không nén, escape XML, bỏ ký tự điều khiển; đọc lại được bằng `parseEpubMeta`. Dùng cho 22.2, 22.8 và sau này EPR-19/20. |
+| **22.2** nhập TXT/HTML | ✅ | Đi qua **đường upload theo mảnh có sẵn**; server (`src/textsplit.ts`) giải mã UTF-8/GB18030, nhận chương Việt/Trung/Anh/đánh số (số La Mã chỉ tính khi viết hoa; danh sách 1,2,3 ngắn không bị coi là chương), cắt theo độ dài nếu không thấy tiêu đề. `complete?dry=1` cho **xem trước** (số chương, tên chương, cảnh báo) trước khi tạo sách; huỷ thì xoá upload. |
+| **22.8** xuất sách | ✅ | `GET /api/books/:id/export?format=txt|epub&from&to&real=1`, dựng lại EPUB từ chương đã lưu (app không giữ file gốc). Tên file mặc định theo tên ngụy trang, `real=1` (hoặc khi đang hiện tên thật) mới dùng tên thật. Nút TXT/EPUB trên trang Library. |
 | **22.5** tìm kiếm toàn văn, **22.7** sao lưu WebDAV | 🔲 | Giai đoạn D (22.7 chờ máy chủ WebDAV) |
 
-Kiểm chứng giai đoạn A+B: `npm test` 40/40 (thêm 8 test đồng bộ và 1 test tiến độ trong danh sách); trình duyệt thật: 17 (đọc) + 33 (Extensions) + 20 (hai thiết bị) kiểm tra, không lỗi console.
+Kiểm chứng giai đoạn A–C: `npm test` 59/59; trình duyệt thật (`tests/ui/`): 17 (đọc) + 33 (Extensions) + 20 (hai thiết bị) + 10 (Insights) + 12 (nhập/xuất) kiểm tra, không lỗi console, và layout mặc định không đổi ở 3 cỡ cửa sổ.
 
-Khuyết điểm có từ trước được sửa trong lúc làm: mở một chương mà không cuộn thì vị trí "hiện tại" **không được lưu** (chỉ lưu khi có sự kiện cuộn), nên máy khác không biết bạn đã chuyển chương.
+Khuyết điểm có từ trước được sửa trong lúc làm: (1) bật/tắt "hiện tên thật" không làm mới trang extension đang mở và xoá mất breadcrumb của nó; (2) mở một chương mà không cuộn thì vị trí "hiện tại" **không được lưu** (chỉ lưu khi có sự kiện cuộn), nên máy khác không biết bạn đã chuyển chương.
 
 Hạn chế đã biết: đồng bộ cài đặt dùng "mới hơn thắng" theo **từng khoá**, nên `extensions` (danh sách bật/tắt) được thay cả khối; đồng hồ giữa các máy có thể lệch nhau vài giây. Highlight cũ chỉ được nhập lên server khi mở đúng cuốn sách đó lần đầu.
