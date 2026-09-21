@@ -62,7 +62,7 @@ Trạng thái: ✅ xong + có test · ⏳ cần chủ hệ thống · 🔲 chưa
 | EPR-19 | P2 | **Nhập bản sao lưu vBook** (`.tar.zst`) qua web: sách có nội dung + tiến độ đọc (mục 13) | L | 🔲 | Nhập đúng file mẫu 14 sách/7 sách có chương; sách đã có không bị tạo trùng; tiến độ khớp; test bằng bản sao lưu giả nhỏ |
 | EPR-20 | P2 | **WebDAV chỉ đọc** để vBook duyệt và nhập sách từ EPUB reader (mục 13) | M | 🔲 | vBook trên điện thoại thấy danh sách và nhập được một cuốn; sai mật khẩu / thử quá nhiều lần bị chặn |
 | EPR-21 | P3 | Đưa **tiến độ đọc về vBook** bằng một bản sao lưu nhỏ mà vBook khôi phục ở chế độ gộp (mục 13) | M | 🔲 | Thử trên **bản sao/dữ liệu thử** trước; chỉ tính xong khi vBook trên điện thoại hiện đúng chương đã đọc mà không mất dữ liệu khác |
-| EPR-22 | P2 | 11 tính năng học từ vBook — **kế hoạch chi tiết ở mục 14** (EPR-22.1 … 22.11, 4 giai đoạn có cổng thoát) | M–L | 🔲 | Từng việc con có test riêng; cổng thoát của giai đoạn ở mục 14.5 |
+| EPR-22 | P2 | 11 tính năng học từ vBook — **kế hoạch chi tiết ở mục 14** (EPR-22.0 … 22.12, 4 giai đoạn có cổng thoát; **mọi giao diện phụ trợ nằm trong view Extensions**) | M–L | 🔲 | Từng việc con có test riêng; cổng thoát của giai đoạn ở mục 14.5 |
 
 Sửa kèm theo: ghi tiến độ đọc cho sách không tồn tại giờ trả 404; đọc chương khi sách đang index dở trả 409 (trước đó có thể trả sai nội dung vì offset mới trỏ vào file cũ); so sánh mật khẩu bằng HMAC nên không lộ độ dài.
 
@@ -223,7 +223,7 @@ Không làm: dịch máy, OCR, đọc thành tiếng bằng AI, extension/chuy�
 - Chưa biết vBook khôi phục thế nào khi bản sao lưu chỉ có một phần dữ liệu (EPR-21).
 - Định dạng nội dung `raw.txt` chỉ thấy ở nguồn Tàng Thư Viện; nguồn khác có thể khác (thử với sách Truyện Full khi có nội dung).
 
-## 14. Kế hoạch: 11 tính năng học từ vBook (EPR-22.1 – 22.11, cộng 22.0 là bộ ghép EPUB dùng chung)
+## 14. Kế hoạch: 11 tính năng học từ vBook (EPR-22.1 – 22.11, cộng 22.0 bộ ghép EPUB dùng chung và 22.12 khung Extensions)
 
 Chỉ là kế hoạch, **chưa làm**. Ý tưởng lấy từ chuỗi giao diện của vBook; mọi thứ tự thiết kế và viết lại, không sao chép.
 
@@ -244,7 +244,7 @@ Chỉ là kế hoạch, **chưa làm**. Ý tưởng lấy từ chuỗi giao di�
 - Dữ liệu người dùng (highlight, bookmark, cài đặt, thống kê) **sống ở SQLite trên server** để được backup; `localStorage` chỉ là bộ nhớ đệm/ngoại tuyến.
 - Migration chỉ **thêm** (bảng/cột mới), không sửa hay xoá cái cũ; dữ liệu cũ trong `localStorage` được **nhập lên server đúng một lần**, không mất.
 - Không thêm phụ thuộc nặng. Việc nào làm được hoàn toàn ở trình duyệt thì làm ở trình duyệt.
-- Không lộ vỏ ngụy trang: chữ mới dùng từ vựng của VS Code ("Activity", "Bookmarks", "Problems"…); mọi màn hình mới phải theo theme hiện tại, kể cả màn boss key.
+- Không lộ vỏ ngụy trang: chữ mới dùng từ vựng của VS Code ("Activity", "Bookmarks", "Problems"…); mọi màn hình mới phải theo theme hiện tại, kể cả màn boss key. **Mọi giao diện phụ trợ nằm trong view Extensions** (mục 14.8); Explorer, editor, tab và status bar giữ nguyên.
 - Mỗi việc có test tích hợp như hiện nay, cộng kiểm tra bằng trình duyệt thật (Playwright) cho phần giao diện.
 
 ### 14.3 Quyết định cần chốt (đã chọn mặc định, đổi được)
@@ -254,6 +254,7 @@ Chỉ là kế hoạch, **chưa làm**. Ý tưởng lấy từ chuỗi giao di�
 3. **Cài đặt nào đồng bộ.** Tất cả trừ tab đang mở (theo thiết bị). `panicCode` và `blurHide` cũng đồng bộ (nằm sau đăng nhập; đổi ở một máy là đổi ở mọi máy).
 4. **Cách đo thời gian đọc.** Chỉ tính khi tab hiện, chưa boss key, và có cuộn/phím trong 60 giây gần nhất; không lưu nội dung nào. Gửi gộp mỗi 60 giây.
 5. **Nhập TXT.** Luôn **xem trước danh sách chương** trước khi nhập; nếu không nhận ra tiêu đề chương thì chia theo độ dài (mặc định ~20.000 ký tự) thay vì từ chối.
+6. **Giao diện phụ trợ = extension** (yêu cầu 2026-09-21, sau khi xem ảnh chụp app đang chạy). Mỗi tính năng là một "extension" nội bộ trong view Extensions, bật/tắt được, xem mục 14.8. Kể cả tìm kiếm: nằm ở extension **Global Search**, không ở icon Search; nếu muốn ô Search thật ở icon Search thì chỉ đổi chỗ đặt của 22.5.
 
 ### 14.4 Từng việc
 
@@ -261,29 +262,30 @@ Effort: XS < 1 giờ · S 1–2 giờ · M nửa ngày · L nhiều ngày. Ướ
 
 | ID | Việc | Thiết kế | Dữ liệu / API | Nghiệm thu | Effort | Cần trước |
 |---|---|---|---|---|---|---|
+| 22.12 | **Khung Extensions** (làm đầu tiên; mọi giao diện phụ trợ dựa vào nó) | Icon Extensions mở view "EXTENSIONS" ngay trong sidebar hiện có: ô lọc (lọc thật), mục "INSTALLED" liệt kê các extension nội bộ (biểu tượng, tên, phiên bản, mô tả, nhà phát hành "devdocs", bánh răng Disable/Enable). Bấm một extension → tab "Extension: <tên>" trong editor (như trang chi tiết của VS Code). Thêm loại tab `ext:<id>` (lưu trong session như tab sách). Bật/tắt từng extension là một khoá cài đặt. Icon Search/Source Control/Run hiện view rỗng như VS Code thật | Khoá cài đặt `extensions` (lưu local trước, đồng bộ khi 22.1 xong); không đổi DB | Playwright: mở/đóng view và tab không đổi hộp bao 5 vùng; tắt một extension thì mọi dấu vết của nó biến mất; mặc định giao diện ngoài view Extensions giống hệt hiện tại | M | — |
 | 22.10 | Tải trước chương kế | Sau khi vẽ chương `idx`, lúc rảnh (`requestIdleCallback`) lấy `idx+1` vào bộ đệm nhỏ (3 chương). Bỏ qua khi tab ẩn/boss key | Không đổi server | Mở chương kế không thấy chờ; số request thừa không quá 1 chương | XS | — |
-| 22.9 | Kệ sách: sắp xếp + % | `GET /api/books` trả thêm `furthest_*` và `last_read_at`; Explorer có menu sắp xếp (đọc gần nhất / mới thêm / tên / %) và hiện % cạnh tên | JOIN `progress`; chưa cần cột mới nếu dùng vị trí hiện tại | Test: thứ tự đúng theo từng kiểu sắp; sách chưa đọc không lỗi | S | — (dùng cột `furthest_*` khi 22.1 xong) |
-| 22.4 | Nhắc nghỉ mắt + "còn X phút trong chương" | Bộ đếm thời gian đọc chủ động (dùng lại ở 22.3). Thời gian còn lại = ký tự còn lại ÷ tốc độ (mặc định 900 ký tự/phút, chỉnh được); hiện ở status bar. Nhắc dạng toast của VS Code sau 30/60/90 phút hoặc tắt | Chỉ `char_count` đã có trong `chapters` | Kiểm tra bằng trình duyệt thật: đếm đúng khi tab ẩn/boss key; nhắc hiện một lần rồi im | S | — |
-| 22.11 | Chủ đề màu | Bộ biến CSS thứ hai/ba: **Dark+** (mặc định), **Light+**, **Monokai**, thêm **AMOLED** (đen). Chọn trong Settings; màn `.panic` dùng cùng biến | `theme` là một khoá cài đặt (đồng bộ ở 22.1) | Playwright: từng theme không có chữ mất tương phản; **màn boss key đổi theo theme** | S | — |
-| 22.1 | Đồng bộ highlight / cài đặt / vị trí lên server, gộp "chỉ tiến" | Bảng `highlights(book_id, chapter_idx, p, start, end, created_at)`, `settings(key, value, updated_at)`; thêm cột `furthest_idx`, `furthest_ratio`, `client_ts` vào `progress`. Server: `furthest` chỉ tăng (so cặp chương, tỉ lệ); vị trí hiện tại ghi khi `client_ts` mới hơn. Highlight: thay cả tập của một chương theo "mới hơn thắng". Client: ghi ngay vào `localStorage`, đẩy lên nền, hàng đợi thử lại khi mất mạng; lần đầu đăng nhập thì nhập `localStorage` cũ lên (gộp, không ghi đè) | `GET/PUT /api/settings`; `GET /api/books/:id/highlights`; `PUT /api/books/:id/chapters/:idx/highlights`; `POST …/progress` nhận thêm `client_ts` (tương thích ngược) | Test hai "thiết bị" (hai cookie): ghi xen kẽ mà `furthest` không lùi; highlight tạo ở máy A hiện ở máy B; nhập `localStorage` cũ một lần và không nhân đôi; backup/restore mang theo cả highlight | M | — |
-| 22.6 | Bookmark | Bảng `bookmarks(id, book_id, chapter_idx, p, note, created_at)`; panel "Bookmarks" trong Explorer; phím tắt chọn phím chưa dùng (`Ctrl+B`, `Ctrl+Shift+U`, `Alt+←/→`, `Ctrl+Alt+T` đã bị chiếm). Khớp với `bookmarks.json` của vBook để EPR-19/21 nối được | `GET/POST/DELETE /api/books/:id/bookmarks` | Thêm/xoá/nhảy tới đúng đoạn; đồng bộ sang thiết bị khác | S | 22.1 |
-| 22.3 | Thống kê đọc + bản đồ nhiệt | Bảng `reading_hourly(day, hour, book_id, seconds, PRIMARY KEY(day, hour, book_id))`; client gửi gộp mỗi 60 giây. Panel "Activity" (dùng icon Source Control) vẽ lưới đóng góp kiểu GitHub, chuỗi ngày, giờ vàng, sách đọc nhiều nhất | `POST /api/stats/ping`; `GET /api/stats?from&to` | Test: cộng dồn đúng, chuỗi ngày qua nửa đêm; trình duyệt thật: lưới hiện đúng, không ghi khi tab ẩn | M | 22.4 (dùng chung bộ đếm) |
+| 22.9 | Kệ sách: sắp xếp + % | `GET /api/books` trả thêm `furthest_*` và `last_read_at`; trang **Library** trong Extensions có sắp xếp (đọc gần nhất / mới thêm / tên / %) và hiện % cạnh mỗi sách; **Explorer giữ nguyên** | JOIN `progress`; chưa cần cột mới nếu dùng vị trí hiện tại | Test: thứ tự đúng theo từng kiểu sắp; sách chưa đọc không lỗi | S | — (dùng cột `furthest_*` khi 22.1 xong) |
+| 22.4 | Nhắc nghỉ mắt + "còn X phút trong chương" | Bộ đếm thời gian đọc chủ động (dùng lại ở 22.3). Thời gian còn lại = ký tự còn lại ÷ tốc độ (mặc định 900 ký tự/phút, chỉnh được); hiện ở status bar **chỉ khi extension Focus Timer bật** (mặc định tắt). Nhắc dạng toast của VS Code sau 30/60/90 phút hoặc tắt; tốc độ đọc và mốc nhắc chỉnh ở trang Focus Timer | Chỉ `char_count` đã có trong `chapters` | Kiểm tra bằng trình duyệt thật: đếm đúng khi tab ẩn/boss key; nhắc hiện một lần rồi im | S | — |
+| 22.11 | Chủ đề màu | Bộ biến CSS thứ hai/ba: **Dark+** (mặc định), **Light+**, **Monokai**, thêm **AMOLED** (đen). Chọn ở trang **Color Themes** trong Extensions; màn `.panic` dùng cùng biến | `theme` là một khoá cài đặt (đồng bộ ở 22.1) | Playwright: từng theme không có chữ mất tương phản; **màn boss key đổi theo theme** | S | — |
+| 22.1 | Đồng bộ highlight / cài đặt / vị trí lên server, gộp "chỉ tiến" | Bảng `highlights(book_id, chapter_idx, p, start, end, created_at)`, `settings(key, value, updated_at)`; thêm cột `furthest_idx`, `furthest_ratio`, `client_ts` vào `progress`. Server: `furthest` chỉ tăng (so cặp chương, tỉ lệ); vị trí hiện tại ghi khi `client_ts` mới hơn. Highlight: thay cả tập của một chương theo "mới hơn thắng". Trạng thái (lần đồng bộ cuối, hàng đợi, lỗi) hiện ở trang **Sync & Backup** và icon `sync` có sẵn ở status bar. Client: ghi ngay vào `localStorage`, đẩy lên nền, hàng đợi thử lại khi mất mạng; lần đầu đăng nhập thì nhập `localStorage` cũ lên (gộp, không ghi đè) | `GET/PUT /api/settings`; `GET /api/books/:id/highlights`; `PUT /api/books/:id/chapters/:idx/highlights`; `POST …/progress` nhận thêm `client_ts` (tương thích ngược) | Test hai "thiết bị" (hai cookie): ghi xen kẽ mà `furthest` không lùi; highlight tạo ở máy A hiện ở máy B; nhập `localStorage` cũ một lần và không nhân đôi; backup/restore mang theo cả highlight | M | — |
+| 22.6 | Bookmark | Bảng `bookmarks(id, book_id, chapter_idx, p, note, created_at)`; trang **Bookmarks** trong Extensions (danh sách, ghi chú, xoá; chấm đánh dấu ở lề chỉ hiện khi extension bật, mặc định tắt); thêm bằng phím tắt chọn phím chưa dùng (`Ctrl+B`, `Ctrl+Shift+U`, `Alt+←/→`, `Ctrl+Alt+T` đã bị chiếm). Khớp với `bookmarks.json` của vBook để EPR-19/21 nối được | `GET/POST/DELETE /api/books/:id/bookmarks` | Thêm/xoá/nhảy tới đúng đoạn; đồng bộ sang thiết bị khác | S | 22.1 |
+| 22.3 | Thống kê đọc + bản đồ nhiệt | Bảng `reading_hourly(day, hour, book_id, seconds, PRIMARY KEY(day, hour, book_id))`; client gửi gộp mỗi 60 giây. Trang **Activity Insights** trong Extensions (tab "Extension: Activity Insights" trong editor) vẽ lưới đóng góp kiểu GitHub, chuỗi ngày, giờ vàng, sách đọc nhiều nhất | `POST /api/stats/ping`; `GET /api/stats?from&to` | Test: cộng dồn đúng, chuỗi ngày qua nửa đêm; trình duyệt thật: lưới hiện đúng, không ghi khi tab ẩn | M | 22.4 (dùng chung bộ đếm) |
 | 22.0 | **Bộ ghép EPUB dùng chung** (chương → EPUB trong bộ nhớ) | Một hàm trong `src/` không phụ thuộc runtime, có unit test; là nền cho 22.2, 22.8 và EPR-19/20 | — | Sinh EPUB mà `parseEpubMeta` đọc lại đúng số chương/tên chương | S | — (làm trong EPR-19 hoặc ngay trước 22.2) |
 | 22.2 | Nhập TXT/HTML tự chia chương | Trình duyệt đọc file, tự đoán mã hoá (UTF-8 nghiêm ngặt, không được thì GB18030), chạy bộ luật **tự viết**: `Chương/Chuong/Hồi/Quyển/Phần + số/số La Mã/chữ`, `第…章/回/节`, `Chapter N`, cùng điều kiện dòng ngắn (≤ 60 ký tự), đứng riêng, có dòng trống trước. Hiện bản xem trước (số chương, chương ngắn/dài bất thường) rồi mới nhập; nếu không nhận ra thì chia theo độ dài. Ghép bằng 22.0 rồi đưa qua đường upload theo mảnh + ingest hiện có | Dùng `/api/uploads` sẵn có, không endpoint mới | Bộ test regex trên mẫu Việt/Trung/Anh và trường hợp lạ; nhập file TXT thật, ra đúng số chương | M | 22.0 |
-| 22.8 | Xuất sách (EPUB/TXT) | `GET /api/books/:id/export?format=epub\|txt&from&to`, đọc tuần tự từ `content.bin`. TXT gộp một file kèm mục lục; EPUB dựng bằng 22.0. **Tên file mặc định theo tên ngụy trang**, chỉ dùng tên thật khi `?real=1` | Không đổi DB | Xuất sách 2953 chương: mở lại được, số chương khớp; bộ nhớ không phình | S–M | 22.0 |
-| 22.5 | Tìm kiếm trong sách / toàn thư viện | Bảng ảo FTS5 `chapter_fts(book_id, idx, text)` với `unicode61 remove_diacritics 2`, **đổi đ→d ở cả hai phía**; lập chỉ mục lúc ingest và có nút "lập chỉ mục lại" cho sách cũ (dùng đường reindex). UI là ô Search của VS Code: kết quả dạng `tệp:dòng` kèm đoạn trích, bấm nhảy tới đoạn. Tìm cả trong bookmark | `GET /api/search?q&book&limit` | Test: bỏ dấu, chữ đ, cụm từ, sách đang index dở không lỗi; **đo dung lượng thêm** (dự kiến bằng cỡ văn bản, ~25 MB cho sách 2953 chương) và tốc độ trên sách lớn | L | — |
+| 22.8 | Xuất sách (EPUB/TXT) | `GET /api/books/:id/export?format=epub\|txt&from&to`, đọc tuần tự từ `content.bin`. Nút Export nằm trên trang **Library**. TXT gộp một file kèm mục lục; EPUB dựng bằng 22.0. **Tên file mặc định theo tên ngụy trang**, chỉ dùng tên thật khi `?real=1` | Không đổi DB | Xuất sách 2953 chương: mở lại được, số chương khớp; bộ nhớ không phình | S–M | 22.0 |
+| 22.5 | Tìm kiếm trong sách / toàn thư viện | Bảng ảo FTS5 `chapter_fts(book_id, idx, text)` với `unicode61 remove_diacritics 2`, **đổi đ→d ở cả hai phía**; lập chỉ mục lúc ingest và có nút "lập chỉ mục lại" cho sách cũ (dùng đường reindex). UI là trang **Global Search** trong Extensions: ô nhập + kết quả dạng `tệp:dòng` kèm đoạn trích, bấm nhảy tới đoạn. Tìm cả trong bookmark | `GET /api/search?q&book&limit` | Test: bỏ dấu, chữ đ, cụm từ, sách đang index dở không lỗi; **đo dung lượng thêm** (dự kiến bằng cỡ văn bản, ~25 MB cho sách 2953 chương) và tốc độ trên sách lớn | L | — |
 | 22.7 | Sao lưu lên WebDAV | `backup.mjs` thêm bước đẩy bản sao lưu tới một URL WebDAV (thông tin trong SealedSecret), giữ N bản, xoá bản cũ; **diễn tập khôi phục từ WebDAV** rồi mới tính xong. Đây là phương án (c) của EPR-05 | Biến môi trường mới, không đổi DB | Backup → xoá sạch → khôi phục từ WebDAV → mọi chương khớp từng byte | M | ⏳ Bạn cho biết máy chủ WebDAV nào (Nextcloud, Synology, dịch vụ khác) |
 
 ### 14.5 Lộ trình và cổng thoát
 
 | Giai đoạn | Việc | Cổng thoát (phải đạt mới sang giai đoạn sau) |
 |---|---|---|
-| **A — nhỏ, thấy ngay** | 22.10, 22.9, 22.4, 22.11 | `npm test` xanh; Playwright: tải trước không làm tăng lỗi, sắp xếp đúng, nhắc nghỉ đúng, mọi theme không vỡ và **boss key đổi theo theme** |
+| **A — nhỏ, thấy ngay** | 22.12 → 22.10, 22.9, 22.4, 22.11 | `npm test` xanh; Playwright: mở/đóng view Extensions không đổi hộp bao 5 vùng và mặc định giao diện giống hệt trước; tải trước không làm tăng lỗi, sắp xếp đúng, nhắc nghỉ đúng, mọi theme không vỡ và **boss key đổi theo theme** |
 | **B — nền đồng bộ** | 22.1 → 22.6 | Bài test hai thiết bị đạt; nhập `localStorage` cũ đúng một lần; restore từ backup mang theo highlight |
 | **C — dữ liệu mới** | 22.3, 22.0 → 22.2, 22.8 | Thống kê đúng qua nửa đêm; nhập TXT thật và xuất lại, số chương khớp |
 | **D — nặng / cần bạn** | 22.5, 22.7 | Đo dung lượng và tốc độ tìm kiếm trên sách lớn; diễn tập khôi phục từ WebDAV |
 
-Phụ thuộc: 22.6 cần 22.1; 22.3 dùng bộ đếm của 22.4; 22.2 và 22.8 cần 22.0. Nếu EPR-19 làm trước thì 22.0 nằm trong đó.
+Phụ thuộc: 22.9, 22.4, 22.11, 22.6, 22.3, 22.5, 22.8 đều cần khung 22.12 (giao diện của chúng nằm trong đó); 22.6 cần 22.1; 22.3 dùng bộ đếm của 22.4; 22.2 và 22.8 cần 22.0. Nếu EPR-19 làm trước thì 22.0 nằm trong đó.
 
 ### 14.6 Chỉ số nghiệm thu chung
 
@@ -303,23 +305,36 @@ Phụ thuộc: 22.6 cần 22.1; 22.3 dùng bộ đếm của 22.4; 22.2 và 22.8
 | FTS5 làm đầy đĩa hoặc chậm khi ingest | Đo trước; lập chỉ mục sau khi ingest xong (không chặn upload); cho tắt theo từng sách |
 | Regex nhận sai chương ở file TXT lạ | Luôn có bản xem trước, chia theo độ dài làm phương án dự phòng |
 
-### 14.8 Ràng buộc: không phá layout VS Code
+### 14.8 Ràng buộc: mọi giao diện phụ trợ nằm trong view Extensions
 
-Layout hiện có 5 vùng cố định: thanh tiêu đề, activity bar (48 px), sidebar (240 px, tối thiểu 170 px), nhóm editor (tab + breadcrumb + nội dung + minimap 70 px) và status bar. Chưa có panel phía dưới, và chưa có `@media` nào (chưa hỗ trợ màn hình điện thoại). **Không việc nào ở mục 14 được đổi kích thước hay vị trí của các vùng này**; mỗi tính năng chỉ được đặt vào một chỗ mà VS Code thật cũng có:
+**Yêu cầu (2026-09-21, sau khi xem ảnh chụp app đang chạy):** Explorer, tab, editor và status bar **giữ nguyên như hiện tại**; giao diện của mọi tính năng thêm vào được dồn hết vào view **Extensions** (icon ghép hình ở activity bar), đúng cách VS Code thật đặt tiện ích.
 
-| Việc | Chỗ đặt | Lưu ý |
-|---|---|---|
-| 22.10, 22.1, 22.7 | Không có giao diện (icon `sync` ở status bar có sẵn có thể báo trạng thái đồng bộ) | — |
-| 22.9 Kệ sách | Nhãn % mờ, căn phải cạnh tên trong cây Explorer (như trang trí của Git); nút sắp xếp nhỏ cạnh tiêu đề "Workspace" | Tên dài phải cắt bằng dấu "…", không được đẩy rộng sidebar |
-| 22.4 Nhắc nghỉ | Một mục mới ở status bar; nhắc bằng toast góc dưới phải (chỗ của thông báo VS Code) | Toast phải có `z-index` **thấp hơn** màn boss key (100) và **ẩn khi đang boss key** |
-| 22.11 Theme | Chỉ đổi biến màu | Màn boss key đổi theo theme |
-| 22.6 Bookmark | Một mục thu gọn được dưới "Workspace" trong sidebar (như "Outline"), mặc định thu gọn | Không làm sidebar dài hơn khi thu gọn |
-| 22.5 Tìm kiếm | View Search trong **cùng** sidebar khi bấm icon Search (đúng cách VS Code hoạt động); bấm kết quả mở tab | Kết quả cắt chữ trong 240 px |
-| 22.3 Thống kê | Lưới 53 tuần **không vừa** sidebar 240 px → mở thành **một tab trong editor** (như tab "Settings"/"Release Notes"); sidebar chỉ hiện tóm tắt | Cần một loại tab đặc biệt vì tab hiện gắn với (sách, chương); đây là chỗ đụng vào code tab, không phải layout |
-| 22.2 Nhập TXT, 22.8 Xuất | Dùng lại hộp thoại Import có sẵn (nới `accept`, thêm bản xem trước); xuất bằng menu chuột phải/nút nhỏ trên mục sách | Không thêm vùng mới |
+Layout hiện có 5 vùng cố định: thanh tiêu đề, activity bar (48 px), sidebar (240 px, tối thiểu 170 px), nhóm editor (tab + breadcrumb + nội dung + minimap 70 px) và status bar. Chưa có panel phía dưới, chưa có `@media` nào (chưa hỗ trợ màn hình điện thoại). **Không việc nào ở mục 14 được đổi kích thước hay vị trí của 5 vùng này.**
 
-Phần bấm icon: hiện chỉ Explorer thật; Search và Source Control là trang trí. Khi hai icon này có việc thật thì Run và Extensions nên hiện một view rỗng ("No extensions installed") để cả bốn cùng phản ứng như VS Code thật.
+**Cách hoạt động (EPR-22.12):**
+- Bấm icon Extensions → sidebar đổi sang view "EXTENSIONS" (cùng vùng 240 px): ô lọc, mục "INSTALLED" liệt kê các extension nội bộ, mỗi cái có biểu tượng, tên, phiên bản, mô tả một dòng, nhà phát hành "devdocs" và bánh răng Disable/Enable.
+- Bấm một extension → mở tab "Extension: <tên>" trong editor (giống trang chi tiết extension của VS Code); giao diện của tính năng nằm trong tab đó. Lưới thống kê 53 tuần không vừa sidebar 240 px nhưng vừa tab này.
+- Tab loại mới `ext:<id>`, lưu trong session như tab sách. Hệ tab hiện gắn với (sách, chương) nên đây là chỗ đụng vào code, không phải layout.
+- Trạng thái bật/tắt lưu trong cài đặt; cũng là công tắc tắt nhanh một tính năng nếu nó lỗi.
 
-Phím tắt mới chỉ dùng tổ hợp có phím bổ trợ; **không dùng phím chữ trơn**, vì W/S/A/D đang để cuộn/chuyển chương và chuỗi mở khoá boss key nhận phím chữ.
+| Extension | Việc | Giao diện nằm ở | Mặc định |
+|---|---|---|---|
+| **Library** | 22.9 sắp xếp + %, 22.8 xuất sách | Trang riêng (danh sách sách, sắp xếp, %, nút Export); **Explorer không đổi** | Bật |
+| **Bookmarks** | 22.6 | Trang riêng; chấm đánh dấu ở lề chỉ hiện khi bật | Tắt |
+| **Activity Insights** | 22.3 | Trang riêng (lưới nhiệt, chuỗi ngày, giờ vàng) | Bật |
+| **Focus Timer** | 22.4 | Trang chỉnh; khi bật mới thêm mục ở status bar và toast nhắc nghỉ | Tắt |
+| **Color Themes** | 22.11 | Trang chọn theme | Bật (Dark+ chính là giao diện hiện tại) |
+| **Global Search** | 22.5 | Trang riêng (ô nhập + kết quả) | Bật |
+| **Sync & Backup** | 22.1, 22.7 | Trang trạng thái; icon `sync` có sẵn ở status bar | Bật |
 
-**Cổng kiểm tra bắt buộc cho mọi giai đoạn:** trước khi làm, Playwright đo hộp bao (bounding box) của 5 vùng ở 3 cỡ cửa sổ (1920×1080, 1366×768, 1024×700) ở trạng thái mặc định và lưu lại; sau mỗi giai đoạn đo lại và **so khớp từng pixel về kích thước/vị trí** (nội dung trong vùng được đổi, khung vùng thì không), kèm ảnh chụp ở chế độ thường và chế độ boss key để xem bằng mắt.
+Không có giao diện: 22.10 (tải trước chương). 22.2 (nhập TXT) dùng lại hộp thoại Import có sẵn (nới `accept`, thêm bản xem trước) vì đó là cách thêm sách chứ không phải giao diện phụ trợ.
+
+**Quy tắc mặc định:** extension nào chỉ hiện bên trong view Extensions thì bật sẵn; extension thêm thứ ra ngoài view (status bar, lề, toast) thì **mặc định tắt**. Vì vậy ở trạng thái mặc định, mọi thứ ngoài view Extensions **giống hệt hiện tại**.
+
+**Các icon còn lại:** Search, Source Control và Run hiện là trang trí. Khi Extensions chạy thật, để cả bốn phản ứng như VS Code thật: bấm vào thì hiện view rỗng ("No results", "The folder currently open doesn't have a git repository", "No debug configurations"). Việc nhỏ này nằm trong 22.12.
+
+**Boss key và chồng lớp:** view Extensions và tab extension nằm trong `#app` nên bị màn boss key (`z-index` 100) che như mọi thứ khác. Toast của Focus Timer phải có `z-index` thấp hơn 100 và bị ẩn hẳn khi đang boss key. Màn boss key đổi theo theme (22.11).
+
+**Phím tắt:** chỉ dùng tổ hợp có phím bổ trợ; **không dùng phím chữ trơn**, vì W/S/A/D đang để cuộn/chuyển chương và chuỗi mở khoá boss key nhận phím chữ.
+
+**Cổng kiểm tra bắt buộc cho mọi giai đoạn:** trước khi làm, Playwright đo hộp bao (bounding box) của 5 vùng ở 3 cỡ cửa sổ (1920×1080, 1366×768, 1024×700) ở trạng thái mặc định và lưu lại; sau mỗi giai đoạn đo lại và so khớp kích thước/vị trí (nội dung trong vùng được đổi, khung vùng thì không), kèm ảnh chụp ở chế độ thường và chế độ boss key để xem bằng mắt. Riêng ngoài view Extensions ở trạng thái mặc định, ảnh chụp phải **trùng ảnh trước khi làm**.
