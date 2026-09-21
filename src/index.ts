@@ -6,6 +6,7 @@ import type { Env } from "./types";
 import { parseEpubMeta, extractChapterRange, EpubLimitError, type SpineItem } from "./epub";
 import { buildEpub, buildText } from "./epubwrite";
 import { readBlocks } from "./chapters";
+import { buildMatch, findHits, foldVi } from "./search";
 import { decodeText, htmlToText, splitChapters } from "./textsplit";
 import { fakeCodeName, fakeFileName } from "./names";
 import { passcodeMatches, signSession, verifySession } from "./auth";
@@ -695,6 +696,7 @@ app.delete("/api/books/:id", async (c) => {
       c.env.DB.prepare(`DELETE FROM bookmarks WHERE book_id = ?`).bind(id),
       c.env.DB.prepare(`DELETE FROM books WHERE id = ?`).bind(id),
     ]);
+    await dropSearchIndex(c.env, id);
     return c.json({ ok: true });
   } finally {
     busyBooks.delete(id);
@@ -754,6 +756,7 @@ app.post("/api/books/:id/reindex", async (c) => {
 
     await abortIngest(c.env, id, book.ingest_upload_id);
     await c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id).run();
+    await dropSearchIndex(c.env, id); // its chapter text is about to be rewritten
     await c.env.DB.prepare(
       `UPDATE books SET ingest_done = 0, ingest_upload_id = NULL, ingest_part_number = 1,
          ingest_offset = 0, ingest_parts_json = '[]'
@@ -946,6 +949,112 @@ app.delete("/api/bookmarks/:bid", async (c) => {
   const res = await c.env.DB.prepare(`DELETE FROM bookmarks WHERE id = ?`).bind(c.req.param("bid")).run();
   if (!res.meta.changes) return c.json({ error: "not found" }, 404);
   return c.json({ ok: true });
+});
+
+// --- Full-text search ------------------------------------------------------------
+// One FTS5 row per chapter (see src/search.ts). The table is created on first use
+// rather than by a migration: if a database engine lacks FTS5, search reports
+// itself unavailable instead of stopping the whole app from starting.
+let ftsReady: boolean | null = null;
+async function ensureFts(env: Env): Promise<boolean> {
+  if (ftsReady !== null) return ftsReady;
+  try {
+    await env.DB.prepare(
+      `CREATE VIRTUAL TABLE IF NOT EXISTS chapter_fts USING fts5(book_id UNINDEXED, idx UNINDEXED, text, tokenize = 'unicode61 remove_diacritics 2')`,
+    ).run();
+    ftsReady = true;
+  } catch (err) {
+    console.error("full-text search is unavailable:", errMsg(err));
+    ftsReady = false;
+  }
+  return ftsReady;
+}
+
+// Forget everything indexed for a book (deleted, or about to be re-indexed).
+async function dropSearchIndex(env: Env, bookId: string): Promise<void> {
+  try {
+    if (!(await ensureFts(env))) return;
+    await env.DB.batch([
+      env.DB.prepare(`DELETE FROM chapter_fts WHERE book_id = ?`).bind(bookId),
+      env.DB.prepare(`DELETE FROM search_state WHERE book_id = ?`).bind(bookId),
+    ]);
+  } catch (err) { console.error("could not drop the search index:", errMsg(err)); }
+}
+
+app.get("/api/search/status", async (c) => {
+  const available = await ensureFts(c.env);
+  const { results } = await c.env.DB.prepare(
+    `SELECT b.id AS book_id, b.chapter_count AS total, COALESCE(s.indexed_upto, 0) AS indexed
+     FROM books b LEFT JOIN search_state s ON s.book_id = b.id WHERE b.ingest_done = 1`,
+  ).all();
+  return c.json({ available, books: results });
+});
+
+// Indexes the next batch of a book's chapters; call until done is true. Safe to
+// repeat: a chapter's row is replaced, never duplicated.
+app.post("/api/books/:id/search-index", async (c) => {
+  const id = c.req.param("id");
+  if (!(await ensureFts(c.env))) return c.json({ error: "search is not available on this server" }, 501);
+  const lock = `search:${id}`;
+  if (busyBooks.has(lock) || busyBooks.has(id)) return c.json({ error: "another operation is running for this book" }, 409);
+  busyBooks.add(lock);
+  try {
+    const book = await c.env.DB.prepare(`SELECT chapter_count, ingest_done FROM books WHERE id = ?`)
+      .bind(id).first<{ chapter_count: number; ingest_done: number }>();
+    if (!book) return c.json({ error: "not found" }, 404);
+    if (!book.ingest_done) return c.json({ error: "book is being indexed" }, 409);
+
+    const st = await c.env.DB.prepare(`SELECT indexed_upto FROM search_state WHERE book_id = ?`)
+      .bind(id).first<{ indexed_upto: number }>();
+    const from = st?.indexed_upto ?? 0;
+    const batch = Math.min(500, Math.max(1, Number(c.env.CHUNK_SIZE) || 30));
+    const { results: rows } = await c.env.DB.prepare(
+      `SELECT idx, byte_offset, byte_length, blocks FROM chapters WHERE book_id = ? AND idx >= ? ORDER BY idx LIMIT ?`,
+    ).bind(id, from, batch).all<{ idx: number; byte_offset: number | null; byte_length: number | null; blocks: string | null }>();
+
+    const stmts = [];
+    let upto = from;
+    for (const r of rows) {
+      const text = foldVi((await readBlocks(c.env, id, r)).map((b) => b.text).join("\n"));
+      stmts.push(c.env.DB.prepare(`DELETE FROM chapter_fts WHERE book_id = ? AND idx = ?`).bind(id, r.idx));
+      stmts.push(c.env.DB.prepare(`INSERT INTO chapter_fts (book_id, idx, text) VALUES (?, ?, ?)`).bind(id, r.idx, text));
+      upto = r.idx + 1;
+    }
+    if (!rows.length) upto = book.chapter_count;
+    stmts.push(c.env.DB.prepare(
+      `INSERT INTO search_state (book_id, indexed_upto, total, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT(book_id) DO UPDATE SET indexed_upto = excluded.indexed_upto, total = excluded.total, updated_at = excluded.updated_at`,
+    ).bind(id, upto, book.chapter_count, Date.now()));
+    await c.env.DB.batch(stmts);
+    return c.json({ done: upto >= book.chapter_count, indexed: upto, total: book.chapter_count });
+  } finally {
+    busyBooks.delete(lock);
+  }
+});
+
+app.get("/api/search", async (c) => {
+  if (!(await ensureFts(c.env))) return c.json({ error: "search is not available on this server" }, 501);
+  const q = buildMatch(c.req.query("q") ?? "");
+  if (!q) return c.json({ error: "type at least one word" }, 400);
+  const book = c.req.query("book");
+  const limit = Math.min(40, Math.max(1, Math.floor(Number(c.req.query("limit"))) || 20));
+
+  const { results: chapterHits } = await c.env.DB.prepare(
+    `SELECT book_id, idx FROM chapter_fts WHERE chapter_fts MATCH ?${book ? " AND book_id = ?" : ""} ORDER BY rank LIMIT ?`,
+  ).bind(...(book ? [q.match, book, limit] : [q.match, limit])).all<{ book_id: string; idx: number }>();
+
+  const results = [];
+  for (const h of chapterHits) {
+    const row = await c.env.DB.prepare(
+      `SELECT idx, title, file_name, byte_offset, byte_length, blocks FROM chapters WHERE book_id = ? AND idx = ?`,
+    ).bind(h.book_id, h.idx).first<{ idx: number; title: string | null; file_name: string; byte_offset: number | null; byte_length: number | null; blocks: string | null }>();
+    if (!row) continue;
+    for (const hit of findHits(await readBlocks(c.env, h.book_id, row), q.tokens)) {
+      results.push({ book_id: h.book_id, idx: h.idx, chapter_title: row.title || row.file_name, ...hit });
+    }
+    if (results.length >= limit * 3) break;
+  }
+  return c.json({ query: q.tokens.join(" "), results });
 });
 
 // --- Reading time statistics ---------------------------------------------------

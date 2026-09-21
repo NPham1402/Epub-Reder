@@ -12,6 +12,7 @@ node --disable-warning=ExperimentalWarning tests/ui/extensions.mjs   # Extension
 node --disable-warning=ExperimentalWarning tests/ui/sync.mjs         # two devices: settings, highlights, progress, bookmarks
 node --disable-warning=ExperimentalWarning tests/ui/insights.mjs     # Activity Insights: what is counted, streaks, heat map
 node --disable-warning=ExperimentalWarning tests/ui/import-export.mjs # .txt import with preview, Library export
+node --disable-warning=ExperimentalWarning tests/ui/search.mjs        # Global Search: indexing, accents, jump to the paragraph
 node --disable-warning=ExperimentalWarning tests/ui/layout.mjs capture   # once, on a known-good build
 node --disable-warning=ExperimentalWarning tests/ui/layout.mjs compare   # after a UI change: the shell must not move
 ```

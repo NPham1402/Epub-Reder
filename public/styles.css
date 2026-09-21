@@ -545,3 +545,14 @@ kbd {
 .up-gap { padding: 0 8px 0 52px; color: var(--fg-muted); }
 .up-warn { margin-top: 8px; color: #d7ba7d; font-size: 12px; }
 .up-btns { display: flex; gap: 8px; margin-top: 12px; }
+
+/* Global Search */
+.gs-bar { display: flex; gap: 8px; margin-bottom: 10px; }
+.gs-input { flex: 1; padding: 6px 8px; }
+.gs-status { font-size: 12px; color: var(--fg-dim); margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+.gs-count { font-size: 12px; color: var(--fg-dim); margin-bottom: 6px; }
+.gs-row { padding: 8px 12px; border-radius: 4px; cursor: pointer; }
+.gs-row:hover { background: var(--list-hover); }
+.gs-where { font-size: 12px; color: var(--fg-dim); }
+.gs-snip { margin-top: 3px; font-size: 13px; color: var(--fg); line-height: 1.45; }
+.gs-mark { background: var(--hl); color: inherit; border-radius: 2px; }

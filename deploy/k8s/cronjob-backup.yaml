@@ -41,6 +41,11 @@ spec:
             - {name: DATA_DIR, value: /data}
             - {name: BACKUP_DIR, value: /backup}
             - {name: BACKUP_KEEP, value: "14"}
+            envFrom:
+            # Off-site copy over WebDAV (optional). Create the Secret with BACKUP_WEBDAV_URL,
+            # BACKUP_WEBDAV_USER and BACKUP_WEBDAV_PASSWORD (docs/platform-upgrade.md, EPR-05/22.7);
+            # without it only the local copy is made.
+            - secretRef: {name: epub-reader-offsite, optional: true}
             volumeMounts:
             # Read-write on purpose: reading a WAL-mode SQLite database needs
             # to touch its -shm file.

@@ -1,6 +1,6 @@
 # Kế hoạch nâng cấp nền tảng — EPUB Reader
 
-> Ngày: 2026-09-20 · Trạng thái: **12/21 mục backlog đang theo dõi đã xong và có test (EPR-02 đã bỏ theo quyết định 2026-09-21); 2 mục cần chủ hệ thống (mục 9); 7 mục chưa làm (EPR-14, 15, 16, 19–22).** Sự cố upload ngày 2026-09-20 ở mục 12; kế hoạch tương thích với app vBook trên điện thoại ở mục 13.
+> Ngày: 2026-09-20 · Trạng thái: **13/21 mục backlog đang theo dõi đã xong và có test (EPR-02 đã bỏ theo quyết định 2026-09-21; EPR-22 xong, riêng 22.7 chờ Secret WebDAV); 2 mục cần chủ hệ thống (mục 9); 6 mục chưa làm (EPR-14, 15, 16, 19, 20, 21).** Sự cố upload ngày 2026-09-20 ở mục 12; kế hoạch tương thích với app vBook trên điện thoại ở mục 13.
 >
 > Phương pháp lấy từ `Worker_Zalo/docs/platform-upgrade/` (baseline có bằng chứng → ưu tiên P0–P3 → quyết định cần chốt → lộ trình có cổng thoát → backlog có ID → chỉ số nghiệm thu → sổ rủi ro), thu nhỏ cho dự án một người: một file thay vì tám.
 
@@ -62,7 +62,7 @@ Trạng thái: ✅ xong + có test · ⏳ cần chủ hệ thống · 🔲 chưa
 | EPR-19 | P2 | **Nhập bản sao lưu vBook** (`.tar.zst`) qua web: sách có nội dung + tiến độ đọc (mục 13) | L | 🔲 | Nhập đúng file mẫu 14 sách/7 sách có chương; sách đã có không bị tạo trùng; tiến độ khớp; test bằng bản sao lưu giả nhỏ |
 | EPR-20 | P2 | **WebDAV chỉ đọc** để vBook duyệt và nhập sách từ EPUB reader (mục 13) | M | 🔲 | vBook trên điện thoại thấy danh sách và nhập được một cuốn; sai mật khẩu / thử quá nhiều lần bị chặn |
 | EPR-21 | P3 | Đưa **tiến độ đọc về vBook** bằng một bản sao lưu nhỏ mà vBook khôi phục ở chế độ gộp (mục 13) | M | 🔲 | Thử trên **bản sao/dữ liệu thử** trước; chỉ tính xong khi vBook trên điện thoại hiện đúng chương đã đọc mà không mất dữ liệu khác |
-| EPR-22 | P2 | 11 tính năng học từ vBook — **kế hoạch chi tiết ở mục 14** (EPR-22.0 … 22.12, 4 giai đoạn có cổng thoát; **mọi giao diện phụ trợ nằm trong view Extensions**) | M–L | 🔲 | Từng việc con có test riêng; cổng thoát của giai đoạn ở mục 14.5 |
+| EPR-22 | P2 | 11 tính năng học từ vBook — **kế hoạch chi tiết ở mục 14** (EPR-22.0 … 22.12, 4 giai đoạn có cổng thoát; **mọi giao diện phụ trợ nằm trong view Extensions**) | M–L | ✅ | Từng việc con có test riêng; cổng thoát của giai đoạn ở mục 14.5 |
 
 Sửa kèm theo: ghi tiến độ đọc cho sách không tồn tại giờ trả 404; đọc chương khi sách đang index dở trả 409 (trước đó có thể trả sai nội dung vì offset mới trỏ vào file cũ); so sánh mật khẩu bằng HMAC nên không lộ độ dài.
 
@@ -383,10 +383,22 @@ Làm trên nhánh `feat/extensions`, từng giai đoạn một commit. Bằng ch
 | **22.0** bộ ghép EPUB | ✅ | `src/epubwrite.ts` (fflate, không phụ thuộc runtime): EPUB3 + NCX, `mimetype` đầu tiên không nén, escape XML, bỏ ký tự điều khiển; đọc lại được bằng `parseEpubMeta`. Dùng cho 22.2, 22.8 và sau này EPR-19/20. |
 | **22.2** nhập TXT/HTML | ✅ | Đi qua **đường upload theo mảnh có sẵn**; server (`src/textsplit.ts`) giải mã UTF-8/GB18030, nhận chương Việt/Trung/Anh/đánh số (số La Mã chỉ tính khi viết hoa; danh sách 1,2,3 ngắn không bị coi là chương), cắt theo độ dài nếu không thấy tiêu đề. `complete?dry=1` cho **xem trước** (số chương, tên chương, cảnh báo) trước khi tạo sách; huỷ thì xoá upload. |
 | **22.8** xuất sách | ✅ | `GET /api/books/:id/export?format=txt|epub&from&to&real=1`, dựng lại EPUB từ chương đã lưu (app không giữ file gốc). Tên file mặc định theo tên ngụy trang, `real=1` (hoặc khi đang hiện tên thật) mới dùng tên thật. Nút TXT/EPUB trên trang Library. |
-| **22.5** tìm kiếm toàn văn, **22.7** sao lưu WebDAV | 🔲 | Giai đoạn D (22.7 chờ máy chủ WebDAV) |
+| **22.5** tìm kiếm toàn văn | ✅ | SQLite FTS5 (`unicode61 remove_diacritics 2`; chữ **đ** được đổi thành d ở cả lúc lập chỉ mục lẫn lúc tìm); bảng FTS tạo lúc dùng lần đầu nên nếu engine thiếu FTS5 thì chỉ mất tìm kiếm chứ app vẫn khởi động (đã kiểm FTS5 trên Node 24.21 / SQLite 3.53.4). Lập chỉ mục theo mảnh `POST /api/books/:id/search-index`; sách mới tự lập chỉ mục nền; sách cũ bấm "Index now". Kết quả trỏ tới **đoạn** (block) và hiện đoạn trích với chữ gốc có dấu; bấm để nhảy tới đoạn. Reindex/xoá sách thì xoá chỉ mục. Nằm ở extension **Global Search**. |
+| **22.7** sao lưu WebDAV | ✅ code + test, ⏳ cần Secret | `server/webdav.ts` + `backup.mjs`: đẩy `db/app-<giờ>.sqlite` và mirror `objects/` (chỉ file mới), giữ N bản, kiểm kích thước; **`restore-webdav`** kéo snapshot mới nhất còn nguyên (bỏ qua bản hỏng/dở dang) rồi khôi phục. Đã diễn tập khôi phục từ WebDAV (máy chủ WebDAV giả nghiêm ngặt) và chương khớp từng byte. Lỗi tải lên làm CronJob **đỏ** nhưng bản local vẫn có. Để bật: tạo Secret `epub-reader-offsite` (xem dưới). |
 
-Kiểm chứng giai đoạn A–C: `npm test` 59/59; trình duyệt thật (`tests/ui/`): 17 (đọc) + 33 (Extensions) + 20 (hai thiết bị) + 10 (Insights) + 12 (nhập/xuất) kiểm tra, không lỗi console, và layout mặc định không đổi ở 3 cỡ cửa sổ.
+Kiểm chứng giai đoạn A–D: `npm test` 69/69; trình duyệt thật (`tests/ui/`): 17 (đọc) + 33 (Extensions) + 20 (hai thiết bị) + 10 (Insights) + 12 (nhập/xuất) + 13 (tìm kiếm) kiểm tra, không lỗi console, và layout mặc định không đổi ở 3 cỡ cửa sổ.
 
 Khuyết điểm có từ trước được sửa trong lúc làm: (1) bật/tắt "hiện tên thật" không làm mới trang extension đang mở và xoá mất breadcrumb của nó; (2) mở một chương mà không cuộn thì vị trí "hiện tại" **không được lưu** (chỉ lưu khi có sự kiện cuộn), nên máy khác không biết bạn đã chuyển chương.
 
 Hạn chế đã biết: đồng bộ cài đặt dùng "mới hơn thắng" theo **từng khoá**, nên `extensions` (danh sách bật/tắt) được thay cả khối; đồng hồ giữa các máy có thể lệch nhau vài giây. Highlight cũ chỉ được nhập lên server khi mở đúng cuốn sách đó lần đầu.
+
+**Bật sao lưu WebDAV (22.7 / EPR-05 phương án c):** app không cần sửa gì thêm. Trong `ci-cd-platform`, tạo Secret cho CronJob (cụm này dùng Sealed Secrets, nên seal như `sealedsecret.yaml` hiện có), ví dụ:
+
+```bash
+kubectl -n epub-reader create secret generic epub-reader-offsite --dry-run=client -o yaml \
+  --from-literal=BACKUP_WEBDAV_URL="https://<máy-chủ-webdav>/remote.php/dav/files/<user>" \
+  --from-literal=BACKUP_WEBDAV_USER="<user>" --from-literal=BACKUP_WEBDAV_PASSWORD="<mật-khẩu-ứng-dụng>" \
+  | kubeseal --format yaml > apps/epub-reader/offsite-sealedsecret.yaml
+```
+
+rồi thêm khối `envFrom` (đã có sẵn trong `deploy/k8s/cronjob-backup.yaml`, `secretRef` tuỳ chọn) vào `apps/epub-reader/cronjob-backup.yaml` của `ci-cd-platform`. Tuỳ chọn: `BACKUP_WEBDAV_DIR` (mặc định `epub-reader`), `BACKUP_WEBDAV_KEEP`. Khôi phục trên máy trống: `node backup.mjs restore-webdav` (cùng các biến môi trường, `DATA_DIR` và `BACKUP_DIR` trống). **Chưa thử trên máy chủ WebDAV thật nào**, chỉ trên máy chủ giả; lần đầu nên chạy tay một Job và thử khôi phục vào thư mục tạm. EPR-05 chưa tính là xong cho đến khi khôi phục thử từ bản off-site thành công trên cụm.

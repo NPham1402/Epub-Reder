@@ -1072,6 +1072,7 @@ async function uploadFile(file) {
   }
 
   status.textContent = `> indexed as "${data.code_name}" · ${result.total} files`;
+  if (typeof autoIndexNewBook === "function") autoIndexNewBook(data.id);
   const list = await api("/api/books").then((r) => r.json());
   state.books = list.books;
   renderTree();
