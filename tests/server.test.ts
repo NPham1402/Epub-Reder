@@ -147,6 +147,19 @@ describe("server", () => {
     assert.equal(real.status, 200);
     const idx = await (await api(srv.base, cookie, `/api/books/${bigId}/index`)).json() as { progress: { chapter_idx: number } };
     assert.equal(idx.progress.chapter_idx, 3);
+
+    type Row = { id: string; progress_idx: number | null; progress_ratio: number | null; last_read_at: number | null };
+    const listed = await (await api(srv.base, cookie, "/api/books")).json() as { books: Row[] };
+    const row = listed.books.find((r) => r.id === bigId)!;
+    assert.equal(row.progress_idx, 3, "the library list carries progress, so it can be sorted without opening each book");
+    assert.equal(row.progress_ratio, 0.5);
+    assert.ok(row.last_read_at! > 0);
+    const other = await upload(srv.base, cookie, makeEpub("Never opened", [{ title: "c", paragraphs: 1, paragraphChars: 20 }]));
+    await ingestAll(srv.base, cookie, other.body.id!);
+    const listed2 = await (await api(srv.base, cookie, "/api/books")).json() as { books: Row[] };
+    const unread = listed2.books.find((r) => r.id === other.body.id)!;
+    assert.deepEqual([unread.progress_idx, unread.progress_ratio, unread.last_read_at], [null, null, null], "an unread book has no progress");
+    await api(srv.base, cookie, `/api/books/${other.body.id}`, { method: "DELETE" });
   });
 
   test("'sign out everywhere' revokes every session; signing in again works", async () => {

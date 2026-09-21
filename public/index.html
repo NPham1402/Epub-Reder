@@ -37,29 +37,59 @@
       <div class="body">
         <!-- Activity bar -->
         <div class="activitybar">
-          <div class="ab-icon active ico" data-icon="files" title="Explorer"></div>
-          <div class="ab-icon ico" data-icon="search" title="Search"></div>
-          <div class="ab-icon ico" data-icon="git-branch" title="Source Control"></div>
-          <div class="ab-icon ico" data-icon="run" title="Run and Debug"></div>
-          <div class="ab-icon ico" data-icon="extensions" title="Extensions"></div>
+          <div class="ab-icon active ico" data-icon="files" data-view="explorer" title="Explorer"></div>
+          <div class="ab-icon ico" data-icon="search" data-view="search" title="Search"></div>
+          <div class="ab-icon ico" data-icon="git-branch" data-view="scm" title="Source Control"></div>
+          <div class="ab-icon ico" data-icon="run" data-view="run" title="Run and Debug"></div>
+          <div class="ab-icon ico" data-icon="extensions" data-view="extensions" title="Extensions"></div>
           <div class="ab-spacer"></div>
           <div class="ab-icon ico" id="btn-account" data-icon="account" title="Account"></div>
         </div>
 
         <!-- Explorer sidebar -->
         <aside class="sidebar" id="sidebar">
-          <div class="sb-header">
-            <span>Explorer</span>
-            <button id="btn-reveal" class="sb-add ico" data-icon="eye" title="Reveal real titles (Ctrl+Alt+T)"></button>
-          </div>
-          <div class="sb-section">
-            <div class="sb-section-title">
-              <span>Workspace</span>
-              <button id="btn-upload2" class="sb-add ico" data-icon="import" title="Import module"></button>
+          <div class="sb-view" id="view-explorer">
+            <div class="sb-header">
+              <span>Explorer</span>
+              <button id="btn-reveal" class="sb-add ico" data-icon="eye" title="Reveal real titles (Ctrl+Alt+T)"></button>
             </div>
-            <div id="tree" class="tree"></div>
+            <div class="sb-section">
+              <div class="sb-section-title">
+                <span>Workspace</span>
+                <button id="btn-upload2" class="sb-add ico" data-icon="import" title="Import module"></button>
+              </div>
+              <div id="tree" class="tree"></div>
+            </div>
+            <div class="sb-footer" id="sb-footer">0 modules</div>
           </div>
-          <div class="sb-footer" id="sb-footer">0 modules</div>
+          <div class="sb-view" id="view-search" hidden>
+            <div class="sb-header"><span>Search</span></div>
+            <div class="sv-body">
+              <input class="sv-input" id="sv-search" placeholder="Search" spellcheck="false" autocomplete="off" />
+              <div class="sv-msg" id="sv-search-msg"></div>
+            </div>
+          </div>
+          <div class="sb-view" id="view-scm" hidden>
+            <div class="sb-header"><span>Source Control</span></div>
+            <div class="sv-body">
+              <div class="sv-msg">The folder currently open doesn't have a git repository. You can initialize a repository which will enable source control features powered by git.</div>
+              <button class="sv-btn" type="button">Initialize Repository</button>
+            </div>
+          </div>
+          <div class="sb-view" id="view-run" hidden>
+            <div class="sb-header"><span>Run and Debug</span></div>
+            <div class="sv-body">
+              <button class="sv-btn" type="button">Run and Debug</button>
+              <div class="sv-msg">To customize Run and Debug create a launch.json file.</div>
+            </div>
+          </div>
+          <div class="sb-view" id="view-extensions" hidden>
+            <div class="sb-header"><span>Extensions</span></div>
+            <div class="sv-body sv-tight">
+              <input class="sv-input" id="ext-filter" placeholder="Search Extensions in Marketplace" spellcheck="false" autocomplete="off" />
+            </div>
+            <div class="sb-section" id="ext-list"></div>
+          </div>
         </aside>
 
         <!-- Editor group -->
@@ -82,6 +112,7 @@
                 </div>
               </div>
               <div class="monaco-host" id="monaco-host" hidden></div>
+              <div class="ext-page" id="ext-page" hidden></div>
             </div>
           </div>
         </main>
@@ -206,6 +237,9 @@
       </div>
     </div>
 
+    <div class="toasts" id="toasts" hidden></div>
+
     <script src="/app.js"></script>
+    <script src="/extensions.js"></script>
   </body>
 </html>

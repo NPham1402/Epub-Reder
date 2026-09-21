@@ -369,9 +369,13 @@ app.post("/api/logout-all", async (c) => {
 // their first ingest — they have no usable content, and the stale-ingest
 // cleanup removes them.
 app.get("/api/books", async (c) => {
+  // Reading progress rides along so the library view can sort and show it
+  // without opening every book.
   const { results } = await c.env.DB.prepare(
-    `SELECT id, title, author, code_name, chapter_count, created_at
-     FROM books WHERE ingest_done = 1 OR ever_completed = 1 ORDER BY created_at DESC`,
+    `SELECT b.id, b.title, b.author, b.code_name, b.chapter_count, b.created_at,
+            p.chapter_idx AS progress_idx, p.scroll_ratio AS progress_ratio, p.updated_at AS last_read_at
+     FROM books b LEFT JOIN progress p ON p.book_id = b.id
+     WHERE b.ingest_done = 1 OR b.ever_completed = 1 ORDER BY b.created_at DESC`,
   ).all();
   return c.json({ books: results });
 });

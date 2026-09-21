@@ -43,6 +43,12 @@ const el = (t, c, txt) => {
 const esc = (s) =>
   String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
 const tabKey = (b, i) => `${b}:${i}`;
+// Tabs are either a chapter {bookId, idx} or an extension page {ext}.
+const extKey = (id) => "ext:" + id;
+const isExtKey = (k) => typeof k === "string" && k.startsWith("ext:");
+const tabId = (t) => (t.ext ? extKey(t.ext) : tabKey(t.bookId, t.idx));
+// extensions.js listens; safe to call before/without it.
+function extEvent(name) { if (typeof onExtEvent === "function") onExtEvent(name); }
 
 /* ============================ Reader (Monaco) ============================== */
 // The reading pane is a real Monaco editor (the editor VS Code itself is
@@ -96,8 +102,15 @@ function setupMonaco(monaco) {
       ],
     },
   });
+  defineReaderTheme(monaco);
+}
+
+// (Re)builds the editor's theme from the current CSS variables; called at start
+// and whenever the color theme changes.
+function defineReaderTheme(monaco) {
+  const light = document.documentElement.style.colorScheme === "light";
   monaco.editor.defineTheme("devdocs", {
-    base: "vs-dark",
+    base: light ? "vs" : "vs-dark",
     inherit: true,
     rules: [
       { token: "comment", foreground: hex(cssVar("--tok-comment"), "#6a9955").slice(1) },
@@ -110,10 +123,10 @@ function setupMonaco(monaco) {
       "editorLineNumber.foreground": hex(cssVar("--ln"), "#858585"),
       "editorLineNumber.activeForeground": hex(cssVar("--ln-active"), "#c6c6c6"),
       "editor.selectionBackground": hex(cssVar("--selection"), "#264f78"),
-      "editor.inactiveSelectionBackground": "#3a3d41",
-      "scrollbarSlider.background": "#79797966",
-      "scrollbarSlider.hoverBackground": "#646464b3",
-      "scrollbarSlider.activeBackground": "#bfbfbf66",
+      "editor.inactiveSelectionBackground": hex(cssVar("--list-inactive"), "#3a3d41"),
+      "scrollbarSlider.background": light ? "#64646466" : "#79797966",
+      "scrollbarSlider.hoverBackground": light ? "#646464b3" : "#646464b3",
+      "scrollbarSlider.activeBackground": light ? "#00000099" : "#bfbfbf66",
     },
   });
 }
@@ -215,6 +228,7 @@ function getReader() {
     ed.onDidScrollChange((e) => {
       if (!e.scrollTopChanged || !state.current) return;
       updatePos();
+      extEvent("scroll");
       if (!reader.raf) reader.raf = requestAnimationFrame(() => { reader.raf = 0; paintFocus(); });
       clearTimeout(state.saveTimer);
       state.saveTimer = setTimeout(() => saveProgress(view.ratio), 700);
@@ -295,6 +309,11 @@ function loadSettings() {
     fontSize: s.fontSize || 15,
     readWidth: s.readWidth || 82,
     panicCode: (s.panicCode || DEFAULT_PANIC_CODE).toLowerCase(),
+    extensions: s.extensions && typeof s.extensions === "object" ? s.extensions : {},
+    theme: s.theme || "dark",
+    readSpeed: s.readSpeed || 900,
+    remindMin: s.remindMin == null ? 60 : s.remindMin,
+    librarySort: s.librarySort || "recent",
   };
 }
 function saveSettings() { localStorage.setItem("devdocs.settings", JSON.stringify(state.settings)); }
@@ -430,6 +449,7 @@ async function loadChapter(book, idx) {
 
 // Prefetch neighbouring chapters so paging feels instant while staying lazy.
 function prefetchAround(book, idx) {
+  if (document.hidden || panicVisible) return; // nobody is reading; don't spend the bandwidth
   loadChapter(book, idx + 1).catch(() => {});
   if (idx > 0) loadChapter(book, idx - 1).catch(() => {});
 }
@@ -495,7 +515,7 @@ async function removeBook(book) {
   state.tabs = state.tabs.filter((t) => t.bookId !== book.id);
   if (state.current && state.current.bookId === book.id) {
     state.activeKey = null;
-    if (state.tabs.length) activate(tabKey(state.tabs[0].bookId, state.tabs[0].idx));
+    if (state.tabs.length) activate(tabId(state.tabs[0]));
     else showWelcome();
   }
   renderTabs();
@@ -510,6 +530,7 @@ function openTab(bookId, idx) {
 }
 
 async function activate(key) {
+  if (isExtKey(key)) return activateExt(key.slice(4));
   const [bookId, idxStr] = key.split(":");
   const idx = Number(idxStr);
   const book = bookById(bookId);
@@ -531,6 +552,7 @@ async function activate(key) {
   updateStatusFile();
   restoreScroll(key, book, idx);
   saveSession();
+  extEvent("chapter");
   prefetchAround(book, idx);
 }
 
@@ -540,25 +562,25 @@ function navChapter(delta) {
   const idx = Number(iStr) + delta;
   const book = bookById(b);
   if (!book || !book._chapters || idx < 0 || idx >= book._chapters.length) return;
-  const ti = state.tabs.findIndex((t) => tabKey(t.bookId, t.idx) === state.activeKey);
+  const ti = state.tabs.findIndex((t) => tabId(t) === state.activeKey);
   if (ti >= 0) state.tabs[ti] = { bookId: b, idx };
   activate(tabKey(b, idx));
 }
 
 function switchToTabIndex(i) {
   if (i < 0 || i >= state.tabs.length) return;
-  activate(tabKey(state.tabs[i].bookId, state.tabs[i].idx));
+  activate(tabId(state.tabs[i]));
 }
 
 function closeTab(key) {
-  const i = state.tabs.findIndex((t) => tabKey(t.bookId, t.idx) === key);
+  const i = state.tabs.findIndex((t) => tabId(t) === key);
   if (i < 0) return;
   state.tabs.splice(i, 1);
   delete state.scroll[key];
   if (state.activeKey === key) {
     if (state.tabs.length) {
       const n = Math.min(i, state.tabs.length - 1);
-      activate(tabKey(state.tabs[n].bookId, state.tabs[n].idx));
+      activate(tabId(state.tabs[n]));
     } else {
       state.activeKey = null;
       showWelcome();
@@ -575,12 +597,15 @@ function renderTabs() {
   const tabs = $("#tabs");
   tabs.innerHTML = "";
   for (const t of state.tabs) {
-    const ch = chapterOf(t.bookId, t.idx);
-    const key = tabKey(t.bookId, t.idx);
+    const ch = t.ext ? null : chapterOf(t.bookId, t.idx);
+    const key = tabId(t);
     const tab = el("div", "tab" + (key === state.activeKey ? " active" : ""));
-    const ico = el("span", "tab-ico " + codiCls("file", ch ? extClass(fileLabel(ch)) : "ext-default"));
+    const ico = t.ext
+      ? el("span", "tab-ico " + codiCls("extensions"))
+      : el("span", "tab-ico " + codiCls("file", ch ? extClass(fileLabel(ch)) : "ext-default"));
     tab.appendChild(ico);
-    tab.appendChild(el("span", "tab-name", ch ? displayName(ch) : "…"));
+    const label = t.ext ? "Extension: " + ((EXT_BY_ID[t.ext] && EXT_BY_ID[t.ext].name) || t.ext) : ch ? displayName(ch) : "…";
+    tab.appendChild(el("span", "tab-name", label));
     const close = el("span", "tab-close " + codiCls("close"));
     close.addEventListener("click", (e) => { e.stopPropagation(); closeTab(key); });
     tab.appendChild(close);
@@ -637,6 +662,7 @@ function updateStatusFile() {
 function showWelcome() {
   state.current = null;
   $("#monaco-host").hidden = true;
+  $("#ext-page").hidden = true;
   $("#welcome").hidden = false;
   $("#breadcrumbs").innerHTML = "";
   document.title = "workspace — devdocs";
@@ -694,6 +720,7 @@ function buildDoc(ch) {
 async function renderContent(ch) {
   const cur = state.current;
   const host = $("#monaco-host");
+  $("#ext-page").hidden = true;
   $("#welcome").hidden = true;
   host.hidden = false;
   let ed;
@@ -761,7 +788,7 @@ function updatePos() {
 async function saveProgress(ratio) {
   if (!state.current) return;
   const book = state.current.book;
-  if (book) book._progress = { chapter_idx: state.current.idx, scroll_ratio: ratio };
+  if (book) { book._progress = { chapter_idx: state.current.idx, scroll_ratio: ratio }; book.last_read_at = Date.now(); }
   api(`/api/books/${state.current.bookId}/progress`, {
     method: "POST",
     body: JSON.stringify({ chapter_idx: state.current.idx, scroll_ratio: ratio }),
@@ -782,13 +809,13 @@ window.addEventListener("pagehide", () => { beaconProgress(); saveSession(); });
 async function restoreSession() {
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem("devdocs.session") || "{}"); } catch {}
-  const tabs = (saved.tabs || []).filter((t) => bookById(t.bookId));
+  const tabs = (saved.tabs || []).filter((t) => (t.ext ? !!EXT_BY_ID[t.ext] : bookById(t.bookId)));
   state.tabs = tabs;
-  for (const t of tabs) state.expanded.add(t.bookId);
+  for (const t of tabs) if (t.bookId) state.expanded.add(t.bookId);
   renderTabs();
-  const active = saved.activeKey && tabs.some((t) => tabKey(t.bookId, t.idx) === saved.activeKey)
+  const active = saved.activeKey && tabs.some((t) => tabId(t) === saved.activeKey)
     ? saved.activeKey
-    : tabs.length ? tabKey(tabs[0].bookId, tabs[0].idx) : null;
+    : tabs.length ? tabId(tabs[0]) : null;
   if (active) await activate(active);
 }
 
@@ -1040,6 +1067,7 @@ function setPanic(on) {
   panicBuffer = "";
   $("#panic").hidden = !on;
   if (on) renderPanic();
+  extEvent("panic");
 }
 function anyModalOpen() { return ["upload", "settings", "login"].some((id) => !$("#" + id).hidden); }
 function renderPanic() {
