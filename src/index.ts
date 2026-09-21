@@ -915,6 +915,44 @@ app.delete("/api/bookmarks/:bid", async (c) => {
   return c.json({ ok: true });
 });
 
+// --- Reading time statistics ---------------------------------------------------
+// The UI reports how long the window was in front of the reader, in small
+// batches. Only durations are stored (see migration 0008).
+type Ping = { book_id: string; day: string; hour: number; seconds: number };
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+function validPing(p: unknown): p is Ping {
+  if (!p || typeof p !== "object") return false;
+  const x = p as Ping;
+  return typeof x.book_id === "string" && x.book_id.length >= 1 && x.book_id.length <= 64 &&
+    typeof x.day === "string" && DAY_RE.test(x.day) &&
+    isInt(x.hour, 0, 23) && isInt(x.seconds, 1, 3600);
+}
+
+app.post("/api/stats/ping", async (c) => {
+  const body = (await c.req.json().catch(() => null)) as { pings?: unknown } | null;
+  const pings = body?.pings;
+  if (!Array.isArray(pings) || pings.length === 0 || pings.length > 200 || !pings.every(validPing)) {
+    return c.json({ error: "bad pings" }, 400);
+  }
+  await c.env.DB.batch(pings.map((p) => c.env.DB.prepare(
+    `INSERT INTO reading_hourly (day, hour, book_id, seconds) VALUES (?, ?, ?, ?)
+     ON CONFLICT(day, hour, book_id) DO UPDATE SET seconds = seconds + excluded.seconds`,
+  ).bind(p.day, p.hour, p.book_id, p.seconds)));
+  return c.json({ ok: true, accepted: pings.length });
+});
+
+// One year of activity by default: per day, per hour of day, per book.
+app.get("/api/stats", async (c) => {
+  const days = Math.min(732, Math.max(1, Math.floor(Number(c.req.query("days"))) || 371));
+  const since = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  const [daily, hourly, perBook] = await Promise.all([
+    c.env.DB.prepare(`SELECT day, SUM(seconds) AS seconds FROM reading_hourly WHERE day >= ? GROUP BY day ORDER BY day`).bind(since).all(),
+    c.env.DB.prepare(`SELECT hour, SUM(seconds) AS seconds FROM reading_hourly WHERE day >= ? GROUP BY hour ORDER BY hour`).bind(since).all(),
+    c.env.DB.prepare(`SELECT book_id, SUM(seconds) AS seconds FROM reading_hourly WHERE day >= ? GROUP BY book_id ORDER BY seconds DESC LIMIT 20`).bind(since).all(),
+  ]);
+  return c.json({ since, daily: daily.results, hourly: hourly.results, per_book: perBook.results });
+});
+
 // --- Static assets fallback --------------------------------------------------
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 

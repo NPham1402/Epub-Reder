@@ -44,7 +44,7 @@ try {
   await showExtView();
   check("Extensions icon opens the Extensions view", (await vis("#view-extensions")) && !(await vis("#view-explorer")));
   const names = await page.locator("#ext-list .ext-name").allTextContents();
-  check("the installed extensions are listed", names.length === 5 && ["Library","Focus Timer","Color Themes","Sync & Backup","Bookmarks"].every((n) => names.includes(n)), names.join(", "));
+  check("the installed extensions are listed", names.length === 6 && ["Library","Focus Timer","Color Themes","Sync & Backup","Bookmarks","Activity Insights"].every((n) => names.includes(n)), names.join(", "));
   await page.fill("#ext-filter", "timer");
   check("the filter narrows the list", (await page.locator("#ext-list .ext-item").count()) === 1);
   await page.fill("#ext-filter", "");
