@@ -29,6 +29,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Build the editor bundle (served from public/vendor)
+        run: npm run build:monaco
+
       - name: Typecheck
         run: npx tsc --noEmit
 

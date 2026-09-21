@@ -208,7 +208,16 @@ html, body {
 
 .editor-wrap { flex: 1; display: flex; min-height: 0; position: relative; }
 .editor { flex: 1; overflow-y: auto; overflow-x: auto; position: relative; }
-.minimap { flex: 0 0 70px; background: var(--editor-bg); cursor: pointer; opacity: 0.85; }
+/* The reading pane is a Monaco editor filling the editor area. */
+.monaco-host { position: absolute; inset: 0; }
+.monaco-host .monaco-editor .cursors-layer > .cursor { display: none !important; }
+.monaco-host .monaco-editor .hl { background: rgba(255, 208, 0, 0.24); border-radius: 2px; cursor: pointer; }
+.monaco-host .monaco-editor .hl:hover { background: rgba(255, 208, 0, 0.36); }
+.monaco-host .monaco-editor .navline { cursor: pointer; }
+.monaco-host .monaco-editor .navline:hover { text-decoration: underline; }
+/* Focus current paragraph: dim the rest. */
+.monaco-host.focusread .monaco-editor .view-line > span > span { opacity: 0.34; transition: opacity 0.18s ease; }
+.monaco-host.focusread .monaco-editor .view-line > span > span.reading-text { opacity: 1; }
 
 .welcome { padding: 40px 60px; color: var(--fg-dim); max-width: 720px; }
 .welcome-logo { width: 72px; height: 72px; opacity: 0.9; margin-bottom: 16px; display: inline-flex; }
@@ -223,39 +232,7 @@ kbd {
   font-size: 11px; color: var(--fg); min-width: 18px; text-align: center;
 }
 
-.code {
-  font-family: var(--font-read); font-size: var(--code-size); line-height: 1.6;
-  padding: 4px 0 40vh; color: var(--editor-fg);
-}
-.code.serif { font-family: Cambria, "Palatino Linotype", Georgia, "Times New Roman", serif; line-height: 1.9; }
-.row { display: flex; min-height: 1.6em; }
-.row .ln {
-  flex: 0 0 62px; width: 62px; text-align: right; padding-right: 24px;
-  color: var(--ln); user-select: none; white-space: nowrap; font-family: var(--font-mono);
-}
-.row.active-line .ln { color: var(--ln-active); }
-.row .lc { flex: 1 1 auto; white-space: pre-wrap; overflow-wrap: anywhere; padding-right: 28px; }
-.row.rp .lc { max-width: var(--read-width); }
-.row.rp:hover { background: rgba(255, 255, 255, 0.028); }
-.row.rh .lc { color: var(--tok-heading); font-weight: 700; max-width: var(--read-width); }
-.row.rc .lc { color: var(--tok-comment); }
-.row.active-line { background: rgba(255, 255, 255, 0.04); }
-.tok-comment { color: var(--tok-comment); }
-.tok-heading { color: var(--tok-heading); font-weight: 700; }
-.tok-keyword { color: var(--tok-keyword); }
-.tok-string { color: var(--tok-string); }
-/* Dialogue stands out more in the reading pane. */
-.code .tok-string { font-weight: 600; }
-/* Manual highlighter marks. */
-.hl { background: rgba(255, 208, 0, 0.24); border-radius: 2px; cursor: pointer; }
-.hl:hover { background: rgba(255, 208, 0, 0.36); }
-/* Focus current paragraph: dim the rest. */
-.code.focusread .row.rp { opacity: 0.34; transition: opacity 0.18s ease; }
-.code.focusread .row.rp.reading { opacity: 1; }
 .setting-tip small { color: var(--fg-muted); }
-.tok-type { color: var(--tok-type); }
-.navline { cursor: pointer; }
-.navline:hover .lc { text-decoration: underline; }
 
 /* ---------------- Status bar ---------------- */
 .statusbar {

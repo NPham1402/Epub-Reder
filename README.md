@@ -27,7 +27,7 @@ Browser (public/) ──► Worker (Hono, src/index.ts) ──► D1  (books, ch
 - **Upload**: EPUB is unzipped in the Worker (`fflate`), the OPF/spine/TOC parsed
   (`fast-xml-parser`), and each chapter's XHTML flattened to heading/paragraph blocks
   (`htmlparser2`). Raw file → R2; parsed blocks → R2 JSON; metadata → D1.
-- **Read**: the frontend pulls chapter JSON and renders it as documentation.
+- **Read**: the frontend pulls chapter JSON and shows it in a real [Monaco](https://github.com/microsoft/monaco-editor) editor (the editor VS Code is built on: line numbers, minimap, `Ctrl+F` find). Only Monaco's core is bundled (`npm run build:monaco` → `public/vendor/monaco/`, ~3 MB, loaded on first use); it is built into the Docker image and is not committed.
 - **Auth**: a single access passcode → HMAC-signed httpOnly session cookie.
 
 ## Self-hosting with Docker (no Cloudflare, no Worker limits)
@@ -59,7 +59,7 @@ Without HTTPS (e.g. `http://<vps-ip>:8787`) login still works because the sessio
 cookie only gets the `Secure` flag when the request is HTTPS. Put a TLS proxy in front
 for anything public.
 
-Run without Docker: `npm run build:server && ACCESS_PASSCODE=… SESSION_SECRET=… DATA_DIR=./data npm run start:server`.
+Run without Docker: `npm run build:monaco && npm run build:server && ACCESS_PASSCODE=… SESSION_SECRET=… DATA_DIR=./data npm run start:server` (the first step builds the reading pane's editor bundle; skip it and the UI can't show chapters).
 
 ### Tests
 

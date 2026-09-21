@@ -11,6 +11,7 @@
     "cf-typegen": "wrangler types",
     "db:migrate": "wrangler d1 migrations apply epub_reader_db --remote",
     "db:migrate:local": "wrangler d1 migrations apply epub_reader_db --local",
+    "build:monaco": "node client/build-monaco.mjs",
     "build:server": "esbuild server/node.ts --bundle --platform=node --format=esm --target=node24 --external:node:sqlite --outfile=dist/server.mjs && esbuild server/backup.ts --bundle --platform=node --format=esm --target=node24 --external:node:sqlite --outfile=dist/backup.mjs",
     "start:server": "node --disable-warning=ExperimentalWarning dist/server.mjs",
     "typecheck:server": "tsc --noEmit -p tsconfig.server.json",
@@ -29,6 +30,7 @@
     "@types/node": "^26.6.2",
     "@vscode/codicons": "^0.0.46-24",
     "esbuild": "^0.28.2",
+    "monaco-editor": "^0.56.0",
     "typescript": "^5.7.3",
     "wrangler": "^4.4.0"
   }

@@ -30,8 +30,6 @@ const state = {
   scroll: {}, // key -> scrollTop
   revealTitles: false,
   saveTimer: null,
-  mmLines: [],
-  mmRAF: 0,
   settings: loadSettings(),
 };
 
@@ -46,33 +44,185 @@ const esc = (s) =>
   String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
 const tabKey = (b, i) => `${b}:${i}`;
 
-// Dialogue quotes to colour as "strings".
-const QUOTE_RE = /"[^"]*"|“[^”]*”|«[^»]*»/g;
+/* ============================ Reader (Monaco) ============================== */
+// The reading pane is a real Monaco editor (the editor VS Code itself is
+// built on): real line numbers, minimap, find widget (Ctrl+F) and selection.
+// Each paragraph is one model line followed by a blank line, so highlights are
+// still stored as (paragraph, start, end).
+const READER_LANG = "devdocs-prose";
+const reader = {
+  ed: null,       // the Monaco editor, created on first use
+  creating: null, // promise while it is being created
+  meta: [],       // per model line (0-based): { kind, p? }
+  paraLine: [],   // paragraph index -> 1-based model line
+  hl: null,       // decoration collections, recreated with each model
+  focus: null,
+  nav: null,
+  raf: 0,
+};
 
-// Render a paragraph: escape text, colour quoted dialogue, apply saved
-// highlight ranges. Splits at every interval boundary so dialogue and
-// highlights can overlap cleanly.
-function renderParagraph(text, hls) {
-  const n = text.length;
-  const q = [];
-  QUOTE_RE.lastIndex = 0;
-  let m;
-  while ((m = QUOTE_RE.exec(text)) !== null) q.push([m.index, m.index + m[0].length]);
-  const H = (hls || []).map((h) => [Math.max(0, h.start), Math.min(n, h.end)]).filter((h) => h[1] > h[0]);
-  const pts = new Set([0, n]);
-  for (const [a, b] of q) { pts.add(a); pts.add(b); }
-  for (const [a, b] of H) { pts.add(a); pts.add(b); }
-  const bs = [...pts].filter((p) => p >= 0 && p <= n).sort((a, b) => a - b);
-  const covers = (pos, arr) => arr.some(([a, b]) => pos >= a && pos < b);
-  let out = "";
-  for (let i = 0; i < bs.length - 1; i++) {
-    const s = bs[i], e = bs[i + 1];
-    if (e <= s) continue;
-    const seg = esc(text.slice(s, e));
-    const cls = (covers(s, q) ? "tok-string" : "") + (covers(s, H) ? (covers(s, q) ? " hl" : "hl") : "");
-    out += cls ? `<span class="${cls}">${seg}</span>` : seg;
-  }
-  return out;
+// Monaco is ~3 MB, so it loads on first use (and is warmed up after login).
+let monacoLoading = null;
+function ensureMonaco() {
+  if (window.monaco) return Promise.resolve(window.monaco);
+  if (monacoLoading) return monacoLoading;
+  monacoLoading = new Promise((resolve, reject) => {
+    const css = document.createElement("link");
+    css.rel = "stylesheet";
+    css.href = "/vendor/monaco/monaco.css";
+    document.head.appendChild(css);
+    const s = document.createElement("script");
+    s.src = "/vendor/monaco/monaco.js";
+    s.onload = () => (window.monaco ? resolve(window.monaco) : reject(new Error("editor missing")));
+    s.onerror = () => reject(new Error("could not load the editor"));
+    document.head.appendChild(s);
+  }).catch((err) => { monacoLoading = null; throw err; });
+  return monacoLoading;
+}
+
+const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const hex = (v, fallback) => (/^#[0-9a-f]{6}$/i.test(v) ? v : fallback);
+
+function setupMonaco(monaco) {
+  monaco.languages.register({ id: READER_LANG });
+  monaco.languages.setMonarchTokensProvider(READER_LANG, {
+    tokenizer: {
+      root: [
+        [/^\s*\/\/.*$/, "comment"],
+        [/^(#{1,6} )(.*)$/, ["comment", "heading"]],
+        [/"[^"]*"|“[^”]*”|«[^»]*»/, "string"],
+        [/[^"“«]+/, ""],
+        [/./, ""],
+      ],
+    },
+  });
+  monaco.editor.defineTheme("devdocs", {
+    base: "vs-dark",
+    inherit: true,
+    rules: [
+      { token: "comment", foreground: hex(cssVar("--tok-comment"), "#6a9955").slice(1) },
+      { token: "heading", foreground: hex(cssVar("--tok-heading"), "#569cd6").slice(1), fontStyle: "bold" },
+      { token: "string", foreground: hex(cssVar("--tok-string"), "#ce9178").slice(1), fontStyle: "bold" },
+    ],
+    colors: {
+      "editor.background": hex(cssVar("--editor-bg"), "#1e1e1e"),
+      "editor.foreground": hex(cssVar("--editor-fg"), "#d4d4d4"),
+      "editorLineNumber.foreground": hex(cssVar("--ln"), "#858585"),
+      "editorLineNumber.activeForeground": hex(cssVar("--ln-active"), "#c6c6c6"),
+      "editor.selectionBackground": hex(cssVar("--selection"), "#264f78"),
+      "editor.inactiveSelectionBackground": "#3a3d41",
+      "scrollbarSlider.background": "#79797966",
+      "scrollbarSlider.hoverBackground": "#646464b3",
+      "scrollbarSlider.activeBackground": "#bfbfbf66",
+    },
+  });
+}
+
+function readerOptions() {
+  const serif = !!state.settings.serif;
+  const size = state.settings.fontSize;
+  return {
+    fontFamily: serif
+      ? 'Cambria, "Palatino Linotype", Georgia, "Times New Roman", serif'
+      : '"Cascadia Code", "Consolas", "Droid Sans Mono", "Courier New", monospace',
+    fontSize: size,
+    lineHeight: Math.round(size * (serif ? 1.9 : 1.6)),
+    wordWrapColumn: state.settings.readWidth,
+  };
+}
+function applyReaderOptions() {
+  if (!reader.ed) return;
+  reader.ed.updateOptions(readerOptions());
+  paintFocus();
+}
+
+// One place that knows how to read/set the reader's scroll position, so the
+// progress, keyboard and session code doesn't care what draws the text.
+const view = {
+  get top() { return reader.ed ? reader.ed.getScrollTop() : 0; },
+  set top(v) { if (reader.ed) reader.ed.setScrollTop(Math.max(0, v)); },
+  get max() {
+    const e = reader.ed;
+    return e ? Math.max(0, e.getScrollHeight() - e.getLayoutInfo().height) : 0;
+  },
+  get ratio() { const m = this.max; return m > 0 ? this.top / m : 0; },
+};
+
+function getReader() {
+  if (reader.ed) return Promise.resolve(reader.ed);
+  if (reader.creating) return reader.creating;
+  reader.creating = ensureMonaco().then((monaco) => {
+    setupMonaco(monaco);
+    const ed = monaco.editor.create($("#monaco-host"), {
+      model: null,
+      language: READER_LANG,
+      theme: "devdocs",
+      ...readerOptions(),
+      readOnly: true,
+      domReadOnly: true,
+      automaticLayout: true,
+      lineNumbers: "on",
+      lineNumbersMinChars: 4,
+      lineDecorationsWidth: 24,
+      glyphMargin: false,
+      folding: false,
+      wordWrap: "bounded",
+      wrappingIndent: "none",
+      minimap: { enabled: true, renderCharacters: false, maxColumn: 60 },
+      scrollBeyondLastLine: true,
+      renderLineHighlight: "none",
+      occurrencesHighlight: "off",
+      selectionHighlight: false,
+      matchBrackets: "never",
+      contextmenu: false,
+      links: false,
+      hover: { enabled: false },
+      quickSuggestions: false,
+      dragAndDrop: false,
+      emptySelectionClipboard: false,
+      guides: { indentation: false },
+      overviewRulerLanes: 0,
+      hideCursorInOverviewRuler: true,
+      overviewRulerBorder: false,
+      stickyScroll: { enabled: false },
+      padding: { top: 4 },
+      scrollbar: { useShadows: false, verticalScrollbarSize: 14, alwaysConsumeMouseWheel: false },
+      // Vietnamese/Chinese text must not get "ambiguous character" boxes.
+      unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false, nonBasicASCII: false },
+      find: { addExtraSpaceOnTop: false, seedSearchStringFromSelection: "selection" },
+    });
+
+    // Select prose to mark it; click a mark to remove it; click an "import"
+    // line to change chapter.
+    ed.onMouseUp((e) => {
+      if (!state.current || !e.event.leftButton) return;
+      const sel = ed.getSelection();
+      if (sel && !sel.isEmpty()) {
+        if (state.settings.camo || sel.startLineNumber !== sel.endLineNumber) return;
+        const m = reader.meta[sel.startLineNumber - 1];
+        if (!m || m.kind !== "p") return;
+        addHighlight(m.p, sel.startColumn - 1, sel.endColumn - 1);
+        ed.setSelection(new monaco.Selection(sel.startLineNumber, 1, sel.startLineNumber, 1));
+        return;
+      }
+      const pos = e.target.position;
+      const m = pos && reader.meta[pos.lineNumber - 1];
+      if (!m) return;
+      if (m.kind === "navPrev") navChapter(-1);
+      else if (m.kind === "navNext") navChapter(1);
+      else if (m.kind === "p") removeHighlightAt(m.p, pos.column - 1);
+    });
+    ed.onDidScrollChange((e) => {
+      if (!e.scrollTopChanged || !state.current) return;
+      updatePos();
+      if (!reader.raf) reader.raf = requestAnimationFrame(() => { reader.raf = 0; paintFocus(); });
+      clearTimeout(state.saveTimer);
+      state.saveTimer = setTimeout(() => saveProgress(view.ratio), 700);
+    });
+    reader.ed = ed;
+    return ed;
+  }).catch((err) => { reader.creating = null; throw err; });
+  return reader.creating;
 }
 
 // ---- Manual highlighter (marker) -------------------------------------------
@@ -84,51 +234,54 @@ function saveHighlights() {
   if (!state.current) return;
   localStorage.setItem(hlKey(state.current.bookId, state.current.idx), JSON.stringify(state.hl));
 }
-function textOffset(container, node, offset) {
-  const r = document.createRange();
-  r.selectNodeContents(container);
-  try { r.setEnd(node, offset); } catch { return 0; }
-  return r.toString().length;
-}
-function closestRp(node) {
-  const el = node && node.nodeType === 3 ? node.parentElement : node;
-  return el && el.closest ? el.closest(".row.rp") : null;
-}
-function rerenderParagraph(p) {
-  const row = $("#code").querySelector(`.row.rp[data-p="${p}"]`);
-  if (!row || !state.current) return;
-  const ch = chapterOf(state.current.bookId, state.current.idx);
-  const b = ((ch && (ch._blocks || ch.blocks)) || [])[p];
-  if (!b) return;
-  row.querySelector(".lc").innerHTML = renderParagraph(b.text, state.hl.filter((h) => h.p === p));
+function paintHighlights() {
+  const ed = reader.ed;
+  if (!ed || !reader.hl) return;
+  const R = window.monaco.Range;
+  reader.hl.set(state.settings.camo ? [] : (state.hl || [])
+    .filter((h) => reader.paraLine[h.p])
+    .map((h) => {
+      const ln = reader.paraLine[h.p];
+      return { range: new R(ln, h.start + 1, ln, h.end + 1), options: { inlineClassName: "hl" } };
+    }));
 }
 function addHighlight(p, start, end) {
   state.hl.push({ p, start, end });
   saveHighlights();
-  rerenderParagraph(p);
+  paintHighlights();
 }
 function removeHighlightAt(p, pos) {
   const before = state.hl.length;
   state.hl = state.hl.filter((h) => !(h.p === p && pos >= h.start && pos < h.end));
-  if (state.hl.length !== before) { saveHighlights(); rerenderParagraph(p); }
+  if (state.hl.length !== before) { saveHighlights(); paintHighlights(); }
 }
 
 // ---- Focus current paragraph ------------------------------------------------
-function cacheProseRows() {
-  state.proseRows = [...$("#code").querySelectorAll(".row.rp")].map((el) => ({ el, top: el.offsetTop }));
+// Paragraphs are dimmed by CSS; the one nearest the reading line (42% down the
+// viewport) is marked so it stays bright.
+function activeParagraphLine() {
+  const ed = reader.ed;
+  const lines = reader.paraLine;
+  if (!ed || !lines.length) return 0;
+  const y = ed.getScrollTop() + ed.getLayoutInfo().height * 0.42;
+  let lo = 0, hi = lines.length - 1, best = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (ed.getTopForLineNumber(lines[mid]) <= y) { best = mid; lo = mid + 1; } else hi = mid - 1;
+  }
+  return lines[best];
 }
-function updateReadingFocus() {
-  if (!state.settings.readFocus) return;
-  const rows = state.proseRows;
-  if (!rows || !rows.length) return;
-  const editor = $("#editor");
-  const center = editor.scrollTop + editor.clientHeight * 0.42;
-  let active = rows[0].el;
-  for (const r of rows) { if (r.top <= center) active = r.el; else break; }
-  if (state.readingEl === active) return;
-  if (state.readingEl) state.readingEl.classList.remove("reading");
-  active.classList.add("reading");
-  state.readingEl = active;
+function paintFocus() {
+  const ed = reader.ed;
+  if (!ed || !reader.focus) return;
+  const on = !!state.settings.readFocus && !state.settings.camo;
+  $("#monaco-host").classList.toggle("focusread", on);
+  if (!on) { reader.focus.clear(); return; }
+  const ln = activeParagraphLine();
+  const model = ed.getModel();
+  reader.focus.set(ln && model
+    ? [{ range: new window.monaco.Range(ln, 1, ln, model.getLineMaxColumn(ln)), options: { inlineClassName: "reading-text" } }]
+    : []);
 }
 
 function loadSettings() {
@@ -168,6 +321,8 @@ async function boot() {
   applySettingsToDom();
   await restoreSession();
   renderTree();
+  const warm = () => ensureMonaco().catch(() => {});
+  if ("requestIdleCallback" in window) requestIdleCallback(warm); else setTimeout(warm, 1500);
 }
 
 function showLogin() {
@@ -368,7 +523,8 @@ async function activate(key) {
   const ch = await loadChapter(book, idx);
   if (!ch) return;
   state.current = { bookId, idx, code_name: book.code_name, fileName: fileLabel(ch), title: ch.title, book };
-  renderContent(ch);
+  await renderContent(ch);
+  if (state.activeKey !== key) return; // superseded while the editor was loading
   renderTabs();
   renderTree();
   renderBreadcrumbs();
@@ -480,50 +636,32 @@ function updateStatusFile() {
 
 function showWelcome() {
   state.current = null;
-  $("#code").hidden = true;
+  $("#monaco-host").hidden = true;
   $("#welcome").hidden = false;
   $("#breadcrumbs").innerHTML = "";
-  state.mmLines = [];
-  drawMinimap();
   document.title = "workspace — devdocs";
 }
 
 /* ============================ Content rendering ============================ */
-function renderContent(ch) {
-  const code = $("#code");
+// Builds the text the editor shows: one model line per paragraph, with a
+// blank line after it, plus the disguise comments and chapter "imports".
+function buildDoc(ch) {
   const camo = state.settings.camo;
-  $("#welcome").hidden = true;
-  code.hidden = false;
-  code.classList.toggle("serif", state.settings.serif);
-  code.classList.toggle("focusread", !!state.settings.readFocus);
-  code.innerHTML = "";
-  state.hl = loadHighlights(state.current.bookId, ch.idx);
-
-  const mm = [];
-  let n = 0;
-  const frag = document.createDocumentFragment();
-  const line = (cls, html, ink, kind) => {
-    n++;
-    const row = el("div", "row " + cls);
-    const ln = el("span", "ln", String(n));
-    const lc = el("span", "lc");
-    lc.innerHTML = html;
-    row.appendChild(ln);
-    row.appendChild(lc);
-    frag.appendChild(row);
-    mm.push({ ink: ink || 0, kind: kind || "p" });
-    return row;
-  };
-  const blank = () => line("rb", "&nbsp;", 0, "blank");
+  const lines = [];
+  const meta = [];
+  const paraLine = [];
+  // Model lines must map 1:1 to paragraphs: fold every kind of line break to a space.
+  const oneLine = (s) => String(s).replace(new RegExp("\r\n|[\r\n\u2028\u2029\u0085\v\f]", "g"), " ");
+  const push = (text, kind, extra) => { lines.push(text); meta.push({ kind, ...extra }); return lines.length; };
+  const blank = () => push("", "blank");
   const heading = (text, level) => {
-    const hashes = "#".repeat(level);
     blank();
-    line("rh", `<span class="tok-comment">${hashes} </span><span class="tok-heading">${esc(text)}</span>`, text.length + 2, "h");
+    push("#".repeat(level) + " " + oneLine(text), "h");
     blank();
   };
 
   // File path header comment (disguise, no title duplication).
-  line("rc", `<span class="tok-comment">// src/${esc(state.current.code_name)}/${esc(fileLabel(ch))}</span>`, 30, "c");
+  push(`// src/${state.current.code_name}/${fileLabel(ch)}`, "c");
   blank();
 
   const blocks = ch._blocks || ch.blocks || [];
@@ -534,11 +672,10 @@ function renderContent(ch) {
     if (b.type === "h1" || b.type === "h2" || b.type === "h3") {
       heading(b.text, b.type === "h1" ? 1 : b.type === "h2" ? 2 : 3);
     } else if (camo) {
-      line("rc", `<span class="tok-comment">// </span>${esc(b.text)}`, b.text.length, "c");
+      push("// " + oneLine(b.text), "c");
       blank();
     } else {
-      const row = line("rp", renderParagraph(b.text, state.hl.filter((h) => h.p === bi)), b.text.length, "p");
-      row.dataset.p = String(bi);
+      paraLine[bi] = push(oneLine(b.text), "p", { p: bi });
       blank();
     }
   });
@@ -547,147 +684,79 @@ function renderContent(ch) {
   const chapters = state.current.book._chapters;
   const cur = ch.idx;
   blank();
-  line("rc", `<span class="tok-comment">// ─────────────────────────────</span>`, 20, "c");
-  if (cur > 0) {
-    const prev = chapters[cur - 1];
-    const row = line("rc navline", `<span class="tok-comment">// ◄ import ./${esc(fileLabel(prev))}</span>`, 24, "c");
-    row.addEventListener("click", () => navChapter(-1));
-  }
-  if (cur < chapters.length - 1) {
-    const next = chapters[cur + 1];
-    const row = line("rc navline", `<span class="tok-comment">// ► import ./${esc(fileLabel(next))}</span>`, 24, "c");
-    row.addEventListener("click", () => navChapter(1));
-  }
+  push("// ─────────────────────────────", "c");
+  if (cur > 0) push(`// ◄ import ./${fileLabel(chapters[cur - 1])}`, "navPrev");
+  if (cur < chapters.length - 1) push(`// ► import ./${fileLabel(chapters[cur + 1])}`, "navNext");
 
-  code.appendChild(frag);
-  state.mmLines = mm;
-  state.readingEl = null;
-  requestAnimationFrame(() => { drawMinimap(); cacheProseRows(); updateReadingFocus(); });
+  return { text: lines.join("\n"), meta, paraLine };
 }
 
-/* ============================ Minimap ====================================== */
-function drawMinimap() {
-  const canvas = $("#minimap");
-  const wrap = canvas.parentElement;
-  if (!wrap) return;
-  const dpr = window.devicePixelRatio || 1;
-  const W = 70;
-  const H = wrap.clientHeight || 300;
-  if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
-    canvas.width = W * dpr;
-    canvas.height = H * dpr;
-    canvas.style.width = W + "px";
-    canvas.style.height = H + "px";
+async function renderContent(ch) {
+  const cur = state.current;
+  const host = $("#monaco-host");
+  $("#welcome").hidden = true;
+  host.hidden = false;
+  let ed;
+  try {
+    ed = await getReader();
+  } catch (err) {
+    console.error(err);
+    host.hidden = true;
+    const w = $("#welcome");
+    w.hidden = false;
+    w.querySelector("p").textContent = "The editor failed to load. Reload the page to try again.";
+    return;
   }
-  const ctx = canvas.getContext("2d");
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, W, H);
+  if (state.current !== cur) return; // another chapter was opened meanwhile
 
-  const lines = state.mmLines;
-  const nLines = lines.length;
-  if (!nLines) return;
+  const doc = buildDoc(ch);
+  reader.meta = doc.meta;
+  reader.paraLine = doc.paraLine;
+  state.hl = loadHighlights(cur.bookId, ch.idx);
 
-  const rowH = Math.max(1, Math.min(3, (H - 8) / nLines));
-  const colors = { h: "#4ec9b0", c: "#5a7a4a", p: "#6b6b6b", blank: null };
-  for (let i = 0; i < nLines; i++) {
-    const L = lines[i];
-    if (L.kind === "blank" || L.ink === 0) continue;
-    const y = 4 + i * rowH;
-    const w = Math.max(2, Math.min(1, L.ink / 70) * (W - 10));
-    ctx.fillStyle = colors[L.kind] || "#6b6b6b";
-    ctx.globalAlpha = L.kind === "h" ? 0.9 : 0.55;
-    ctx.fillRect(6, y, w, Math.max(1, rowH - 0.6));
-  }
-  ctx.globalAlpha = 1;
-
-  // Viewport slider.
-  const editor = $("#editor");
-  const total = editor.scrollHeight || 1;
-  const contentH = Math.min(H, 4 + nLines * rowH);
-  const boxY = (editor.scrollTop / total) * contentH;
-  const boxH = Math.max(18, (editor.clientHeight / total) * contentH);
-  ctx.fillStyle = "rgba(255,255,255,0.08)";
-  ctx.fillRect(0, boxY, W, boxH);
-  ctx.strokeStyle = "rgba(255,255,255,0.12)";
-  ctx.lineWidth = 1;
-  ctx.strokeRect(0.5, boxY + 0.5, W - 1, boxH - 1);
+  ed.updateOptions(readerOptions());
+  const old = ed.getModel();
+  ed.setModel(window.monaco.editor.createModel(doc.text, READER_LANG));
+  if (old) old.dispose();
+  reader.hl = ed.createDecorationsCollection([]);
+  reader.focus = ed.createDecorationsCollection([]);
+  reader.nav = ed.createDecorationsCollection(
+    doc.meta.flatMap((m, i) => (m.kind === "navPrev" || m.kind === "navNext")
+      ? [{ range: new window.monaco.Range(i + 1, 1, i + 1, doc.text.split("\n")[i].length + 1), options: { inlineClassName: "navline" } }]
+      : []),
+  );
+  paintHighlights();
+  paintFocus();
 }
-$("#minimap").addEventListener("click", (e) => {
-  const editor = $("#editor");
-  const rect = e.currentTarget.getBoundingClientRect();
-  const ratio = (e.clientY - rect.top) / rect.height;
-  editor.scrollTop = ratio * editor.scrollHeight - editor.clientHeight / 2;
-});
 
 /* ============================ Scroll / progress =========================== */
-function captureScroll() { if (state.activeKey) state.scroll[state.activeKey] = $("#editor").scrollTop; }
+function captureScroll() { if (state.activeKey) state.scroll[state.activeKey] = view.top; }
 function restoreScroll(key, book, idx) {
-  const editor = $("#editor");
-  requestAnimationFrame(() => {
+  let tries = 0;
+  const apply = () => {
+    if (!reader.ed || state.activeKey !== key) return;
+    reader.ed.layout();
     let top = 0;
+    let wantRatio = 0;
     if (key in state.scroll) top = state.scroll[key];
     else if (book._progress && book._progress.chapter_idx === idx) {
-      top = (book._progress.scroll_ratio || 0) * (editor.scrollHeight - editor.clientHeight);
+      wantRatio = book._progress.scroll_ratio || 0;
+      top = wantRatio * view.max;
     }
-    editor.scrollTop = top;
-    drawMinimap();
+    // Layout can lag a frame behind the new model; don't "restore" to 0 (and
+    // then save that over the real position) until it has caught up.
+    if (top === 0 && wantRatio > 0 && view.max === 0 && tries++ < 20) { requestAnimationFrame(apply); return; }
+    view.top = top;
     updatePos();
-    updateReadingFocus();
-  });
+    paintFocus();
+  };
+  requestAnimationFrame(apply);
 }
 function updatePos() {
-  const editor = $("#editor");
-  const denom = editor.scrollHeight - editor.clientHeight;
-  const ratio = denom > 0 ? editor.scrollTop / denom : 0;
-  const ln = Math.max(1, Math.round(ratio * state.mmLines.length));
-  $("#st-pos").textContent = `Ln ${ln}, Col 1  ${Math.round(ratio * 100)}%`;
+  if (!reader.ed) return;
+  const r = reader.ed.getVisibleRanges()[0];
+  $("#st-pos").textContent = `Ln ${r ? r.startLineNumber : 1}, Col 1  ${Math.round(view.ratio * 100)}%`;
 }
-
-$("#editor").addEventListener("scroll", () => {
-  if (!state.mmRAF) state.mmRAF = requestAnimationFrame(() => { state.mmRAF = 0; drawMinimap(); updateReadingFocus(); });
-  updatePos();
-  if (!state.current) return;
-  const editor = $("#editor");
-  const denom = editor.scrollHeight - editor.clientHeight;
-  const ratio = denom > 0 ? editor.scrollTop / denom : 0;
-  clearTimeout(state.saveTimer);
-  state.saveTimer = setTimeout(() => saveProgress(ratio), 700);
-});
-
-// Manual highlighter: select prose to mark it; click a mark to remove it.
-$("#code").addEventListener("mouseup", () => {
-  if (state.settings.camo || !state.current) return;
-  const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || !sel.rangeCount) return;
-  const range = sel.getRangeAt(0);
-  const row = closestRp(range.startContainer);
-  if (!row || row !== closestRp(range.endContainer)) return;
-  const lc = row.querySelector(".lc");
-  const p = Number(row.dataset.p);
-  let start = textOffset(lc, range.startContainer, range.startOffset);
-  let end = textOffset(lc, range.endContainer, range.endOffset);
-  if (end < start) { const t = start; start = end; end = t; }
-  if (end - start < 1) return;
-  addHighlight(p, start, end);
-  sel.removeAllRanges();
-});
-$("#code").addEventListener("click", (e) => {
-  const mark = e.target.closest && e.target.closest(".hl");
-  if (!mark) return;
-  const row = e.target.closest(".row.rp");
-  if (!row) return;
-  const lc = row.querySelector(".lc");
-  const p = Number(row.dataset.p);
-  let pos = -1;
-  if (document.caretRangeFromPoint) {
-    const r = document.caretRangeFromPoint(e.clientX, e.clientY);
-    if (r) pos = textOffset(lc, r.startContainer, r.startOffset);
-  } else if (document.caretPositionFromPoint) {
-    const cp = document.caretPositionFromPoint(e.clientX, e.clientY);
-    if (cp) pos = textOffset(lc, cp.offsetNode, cp.offset);
-  }
-  if (pos >= 0) removeHighlightAt(p, pos);
-});
 
 async function saveProgress(ratio) {
   if (!state.current) return;
@@ -700,9 +769,7 @@ async function saveProgress(ratio) {
 }
 function beaconProgress() {
   if (!state.current) return;
-  const editor = $("#editor");
-  const denom = editor.scrollHeight - editor.clientHeight;
-  const ratio = denom > 0 ? editor.scrollTop / denom : 0;
+  const ratio = view.ratio;
   const body = JSON.stringify({ chapter_idx: state.current.idx, scroll_ratio: ratio });
   try { navigator.sendBeacon(`/api/books/${state.current.bookId}/progress`, new Blob([body], { type: "application/json" })); } catch {}
 }
@@ -912,9 +979,7 @@ $("#opt-serif").addEventListener("change", (e) => { state.settings.serif = e.tar
 $("#opt-focus").addEventListener("change", (e) => {
   state.settings.readFocus = e.target.checked;
   saveSettings();
-  $("#code").classList.toggle("focusread", e.target.checked);
-  if (e.target.checked) updateReadingFocus();
-  else if (state.readingEl) { state.readingEl.classList.remove("reading"); state.readingEl = null; }
+  paintFocus();
 });
 $("#font-inc").addEventListener("click", () => changeFont(1));
 $("#font-dec").addEventListener("click", () => changeFont(-1));
@@ -924,20 +989,26 @@ function changeFont(d) {
   state.settings.fontSize = Math.min(28, Math.max(10, state.settings.fontSize + d));
   $("#font-val").textContent = state.settings.fontSize;
   saveSettings(); applySettingsToDom();
-  requestAnimationFrame(() => { drawMinimap(); cacheProseRows(); updateReadingFocus(); });
+  applyReaderOptions();
 }
 function changeWidth(d) {
   state.settings.readWidth = Math.min(140, Math.max(50, state.settings.readWidth + d));
   $("#width-val").textContent = state.settings.readWidth;
   saveSettings(); applySettingsToDom();
-  requestAnimationFrame(() => { drawMinimap(); cacheProseRows(); updateReadingFocus(); });
+  applyReaderOptions();
 }
 function applySettingsToDom() {
   const r = document.documentElement.style;
   r.setProperty("--code-size", state.settings.fontSize + "px");
   r.setProperty("--read-width", state.settings.readWidth + "ch");
 }
-function rerender() { const ch = state.current && chapterOf(state.current.bookId, state.current.idx); if (ch) renderContent(ch); }
+async function rerender() {
+  const ch = state.current && chapterOf(state.current.bookId, state.current.idx);
+  if (!ch) return;
+  const top = view.top;
+  await renderContent(ch);
+  view.top = top;
+}
 $("#btn-logout").addEventListener("click", async () => { await api("/api/logout", { method: "POST" }); location.reload(); });
 $("#btn-logout-all").addEventListener("click", async () => {
   if (!confirm("Sign out of every device, including this one?")) return;
@@ -960,7 +1031,7 @@ function toggleReveal() {
 $("#btn-reveal").addEventListener("click", toggleReveal);
 
 /* ============================ Sidebar / panic ============================= */
-function toggleSidebar() { $("#sidebar").classList.toggle("hidden"); requestAnimationFrame(drawMinimap); }
+function toggleSidebar() { $("#sidebar").classList.toggle("hidden"); }
 
 let panicVisible = false;
 let panicBuffer = "";
@@ -984,6 +1055,8 @@ window.addEventListener("blur", () => {
 function isBare(e) {
   if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return false;
   const t = e.target;
+  // Monaco's own hidden input is not a field the user is typing into.
+  if (t && t.classList && t.classList.contains("inputarea")) return true;
   if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return false;
   return true;
 }
@@ -992,11 +1065,10 @@ function isBare(e) {
 const moveKeys = { w: false, s: false };
 let moveRAF = null;
 function moveLoop() {
-  const editor = $("#editor");
   let speed = 0;
   if (moveKeys.w) speed -= 16;
   if (moveKeys.s) speed += 16;
-  if (speed) editor.scrollTop += speed;
+  if (speed) view.top += speed;
   if (moveKeys.w || moveKeys.s) moveRAF = requestAnimationFrame(moveLoop);
   else moveRAF = null;
 }
@@ -1011,6 +1083,7 @@ document.addEventListener("keydown", (e) => {
   // typing the configured unlock phrase (Settings) closes it.
   if (panicVisible) {
     e.preventDefault();
+    e.stopPropagation();
     if (e.key.length === 1) {
       panicBuffer = (panicBuffer + e.key).toLowerCase().slice(-32);
       const code = state.settings.panicCode || DEFAULT_PANIC_CODE;
@@ -1028,8 +1101,12 @@ document.addEventListener("keydown", (e) => {
   else if (mod && e.shiftKey && e.key.toLowerCase() === "u") { e.preventDefault(); openUpload(); }
   else if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); changeFont(1); }
   else if (mod && e.key === "-") { e.preventDefault(); changeFont(-1); }
-  else if (isBare(e) && e.key === "ArrowRight") { e.preventDefault(); navChapter(1); }
-  else if (isBare(e) && e.key === "ArrowLeft") { e.preventDefault(); navChapter(-1); }
+  else if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "f" && reader.ed && state.current && !anyModalOpen()) {
+    // Editor find widget (the browser's own find would miss text Monaco hasn't rendered).
+    e.preventDefault(); reader.ed.focus(); reader.ed.getAction("actions.find").run();
+  }
+  else if (isBare(e) && e.key === "ArrowRight") { e.preventDefault(); e.stopPropagation(); navChapter(1); }
+  else if (isBare(e) && e.key === "ArrowLeft") { e.preventDefault(); e.stopPropagation(); navChapter(-1); }
   else if (isBare(e) && e.key.toLowerCase() === "d") { e.preventDefault(); navChapter(1); }
   else if (isBare(e) && e.key.toLowerCase() === "a") { e.preventDefault(); navChapter(-1); }
   else if (isBare(e) && e.key.toLowerCase() === "w") {
@@ -1041,13 +1118,12 @@ document.addEventListener("keydown", (e) => {
     if (!moveKeys.s) { moveKeys.s = true; if (!moveRAF) moveRAF = requestAnimationFrame(moveLoop); }
   }
   else if (e.altKey && /^[1-9]$/.test(e.key)) { e.preventDefault(); switchToTabIndex(Number(e.key) - 1); }
-});
+}, true);
 document.addEventListener("keyup", (e) => {
   const k = e.key.toLowerCase();
   if (k === "w" || k === "s") moveKeys[k] = false;
 });
 window.addEventListener("blur", stopMoveKeys);
-window.addEventListener("resize", () => requestAnimationFrame(drawMinimap));
 
 /* ============================ Panic content =============================== */
 const PANIC_CODE = [

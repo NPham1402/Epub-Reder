@@ -16,6 +16,10 @@ COPY tsconfig.json ./
 COPY src ./src
 COPY server ./server
 RUN npm run build:server
+# The reading pane is a real Monaco editor: bundle just its core (no language
+# packs) into public/vendor/monaco, loaded lazily by the UI.
+COPY client ./client
+RUN npm run build:monaco
 
 FROM node:24-alpine AS runtime
 ENV NODE_ENV=production \
@@ -29,6 +33,7 @@ COPY --from=build /app/dist/server.mjs ./server.mjs
 # Backup/restore tool, run by the cluster CronJob against the same volume.
 COPY --from=build /app/dist/backup.mjs ./backup.mjs
 COPY public ./public
+COPY --from=build /app/public/vendor ./public/vendor
 COPY migrations ./migrations
 # uid 1000 = the image's built-in `node` user (matches runAsUser in the k8s
 # manifests). On Kubernetes the PVC is made writable via fsGroup instead.

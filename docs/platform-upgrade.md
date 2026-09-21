@@ -236,7 +236,7 @@ Chỉ là kế hoạch, **chưa làm**. Ý tưởng lấy từ chuỗi giao di�
 | Cài đặt | `localStorage` khoá `devdocs.settings`: `blurHide, camo, serif, readFocus, fontSize, readWidth, panicCode`; tab đang mở ở `devdocs.session` | Mỗi thiết bị một bộ |
 | Danh sách sách | `GET /api/books` không trả tiến độ; tiến độ chỉ có khi mở `/index` của từng sách | Explorer không hiện được % |
 | Giao diện | Màu là biến CSS ở `:root` (89 chỗ dùng `var(--…)`), màn hình boss key (`.panic`) dùng cùng biến | Đổi theme khá rẻ, nhưng **màn boss key phải đổi theo**, không thì hiện màn tối trong IDE sáng là lộ |
-| Chưa có | bookmark, thống kê, tìm kiếm (icon Search/Source Control ở activity bar chỉ để trang trí), theme, xuất sách, tải trước chương, nhập TXT | |
+| Chưa có | bookmark, thống kê, tìm kiếm (icon Search/Source Control ở activity bar chỉ để trang trí), theme, xuất sách, nhập TXT (tải trước chương thì **đã có** — `prefetchAround`, xem 14.9) | |
 | FTS5 | Đã thử: `node:sqlite` có FTS5; `unicode61 remove_diacritics 2` bỏ dấu tiếng Việt đúng (tìm "trach nhat" ra "Trạch Nhật") **trừ chữ đ** ("dao" không ra "đạo") | Cần đổi đ→d ở cả lúc lập chỉ mục lẫn lúc tìm. Thử lại trên Node 24 của image khi làm |
 
 ### 14.2 Nguyên tắc
@@ -263,7 +263,7 @@ Effort: XS < 1 giờ · S 1–2 giờ · M nửa ngày · L nhiều ngày. Ướ
 | ID | Việc | Thiết kế | Dữ liệu / API | Nghiệm thu | Effort | Cần trước |
 |---|---|---|---|---|---|---|
 | 22.12 | **Khung Extensions** (làm đầu tiên; mọi giao diện phụ trợ dựa vào nó) | Icon Extensions mở view "EXTENSIONS" ngay trong sidebar hiện có: ô lọc (lọc thật), mục "INSTALLED" liệt kê các extension nội bộ (biểu tượng, tên, phiên bản, mô tả, nhà phát hành "devdocs", bánh răng Disable/Enable). Bấm một extension → tab "Extension: <tên>" trong editor (như trang chi tiết của VS Code). Thêm loại tab `ext:<id>` (lưu trong session như tab sách). Bật/tắt từng extension là một khoá cài đặt. Icon Search/Source Control/Run hiện view rỗng như VS Code thật | Khoá cài đặt `extensions` (lưu local trước, đồng bộ khi 22.1 xong); không đổi DB | Playwright: mở/đóng view và tab không đổi hộp bao 5 vùng; tắt một extension thì mọi dấu vết của nó biến mất; mặc định giao diện ngoài view Extensions giống hệt hiện tại | M | — |
-| 22.10 | Tải trước chương kế | Sau khi vẽ chương `idx`, lúc rảnh (`requestIdleCallback`) lấy `idx+1` vào bộ đệm nhỏ (3 chương). Bỏ qua khi tab ẩn/boss key | Không đổi server | Mở chương kế không thấy chờ; số request thừa không quá 1 chương | XS | — |
+| 22.10 | Tải trước chương kế (**đã có sẵn** `prefetchAround`; chỉ còn chỉnh nhỏ, xem 14.9) | Sau khi vẽ chương `idx`, lúc rảnh (`requestIdleCallback`) lấy `idx+1` vào bộ đệm nhỏ (3 chương). Bỏ qua khi tab ẩn/boss key | Không đổi server | Mở chương kế không thấy chờ; số request thừa không quá 1 chương | XS | — |
 | 22.9 | Kệ sách: sắp xếp + % | `GET /api/books` trả thêm `furthest_*` và `last_read_at`; trang **Library** trong Extensions có sắp xếp (đọc gần nhất / mới thêm / tên / %) và hiện % cạnh mỗi sách; **Explorer giữ nguyên** | JOIN `progress`; chưa cần cột mới nếu dùng vị trí hiện tại | Test: thứ tự đúng theo từng kiểu sắp; sách chưa đọc không lỗi | S | — (dùng cột `furthest_*` khi 22.1 xong) |
 | 22.4 | Nhắc nghỉ mắt + "còn X phút trong chương" | Bộ đếm thời gian đọc chủ động (dùng lại ở 22.3). Thời gian còn lại = ký tự còn lại ÷ tốc độ (mặc định 900 ký tự/phút, chỉnh được); hiện ở status bar **chỉ khi extension Focus Timer bật** (mặc định tắt). Nhắc dạng toast của VS Code sau 30/60/90 phút hoặc tắt; tốc độ đọc và mốc nhắc chỉnh ở trang Focus Timer | Chỉ `char_count` đã có trong `chapters` | Kiểm tra bằng trình duyệt thật: đếm đúng khi tab ẩn/boss key; nhắc hiện một lần rồi im | S | — |
 | 22.11 | Chủ đề màu | Bộ biến CSS thứ hai/ba: **Dark+** (mặc định), **Light+**, **Monokai**, thêm **AMOLED** (đen). Chọn ở trang **Color Themes** trong Extensions; màn `.panic` dùng cùng biến | `theme` là một khoá cài đặt (đồng bộ ở 22.1) | Playwright: từng theme không có chữ mất tương phản; **màn boss key đổi theo theme** | S | — |
@@ -338,3 +338,31 @@ Không có giao diện: 22.10 (tải trước chương). 22.2 (nhập TXT) dùng
 **Phím tắt:** chỉ dùng tổ hợp có phím bổ trợ; **không dùng phím chữ trơn**, vì W/S/A/D đang để cuộn/chuyển chương và chuỗi mở khoá boss key nhận phím chữ.
 
 **Cổng kiểm tra bắt buộc cho mọi giai đoạn:** trước khi làm, Playwright đo hộp bao (bounding box) của 5 vùng ở 3 cỡ cửa sổ (1920×1080, 1366×768, 1024×700) ở trạng thái mặc định và lưu lại; sau mỗi giai đoạn đo lại và so khớp kích thước/vị trí (nội dung trong vùng được đổi, khung vùng thì không), kèm ảnh chụp ở chế độ thường và chế độ boss key để xem bằng mắt. Riêng ngoài view Extensions ở trạng thái mặc định, ảnh chụp phải **trùng ảnh trước khi làm**.
+
+### 14.9 Cập nhật 2026-09-21: khung đọc chuyển sang Monaco (nhánh `feat/monaco-reader`, chưa gộp vào `main`)
+
+Theo yêu cầu, vùng đọc giờ là **Monaco** (lõi editor của VS Code, MIT) thay cho các dòng HTML tự vẽ.
+
+**Đính chính hai chỗ trong kế hoạch trước:**
+- App **đã dùng bộ icon thật `@vscode/codicons`** (751 icon, font nhúng sẵn, commit `5dc0103`); câu "app dùng icon riêng" là sai, nên không có gì để đổi.
+- **Tải trước chương kế đã có sẵn** (`prefetchAround` nạp chương ±1 khi mở chương), nên EPR-22.10 chỉ còn là chỉnh nhỏ (bộ đệm, bỏ qua khi tab ẩn/boss key), không phải làm mới.
+
+**Đã làm và kiểm chứng (Playwright, server thật, CSP nghiêm):**
+- Bundle riêng chỉ gồm lõi editor + ô Find + Go to line, **không có gói ngôn ngữ** (bản `min` đầy đủ nặng hơn 10 MB): `public/vendor/monaco/` gồm `monaco.js` 2,7 MB (gzip ~0,7 MB), `monaco.css` 94 KB, `editor.worker.js` 297 KB. Build bằng `npm run build:monaco` (esbuild, script ở `client/build-monaco.mjs`); thư mục đầu ra **không commit**, được dựng trong Dockerfile và trong `deploy.yml` (đường Cloudflare cũ).
+- Tải lười ở lần mở chương đầu, và làm nóng sau khi đăng nhập lúc rảnh.
+- Mỗi đoạn văn = một dòng của model + một dòng trống, nên highlight vẫn lưu theo `(đoạn, bắt đầu, kết thúc)` như cũ, dữ liệu `localStorage` cũ vẫn dùng được.
+- Có thật: số dòng, **minimap thật**, `Ctrl+F` (ô Find của editor), chọn chữ; lời thoại tô màu, tiêu đề, comment ngụy trang; đoạn đang đọc sáng, đoạn khác mờ; chế độ camo (`// `); serif; cỡ chữ; độ rộng dòng (`wordWrapColumn`).
+- 17/17 kiểm tra: render dưới CSP, gutter, minimap, Find, tạo/xoá highlight, focus, giữ `S` để cuộn, tiến độ lưu về server, `D`/`A` và phím mũi tên đổi chương **kể cả khi editor đang có tiêu điểm**, khôi phục vị trí sau khi tải lại, `Ctrl+=`, camo, boss key. Thử với sách thật 2953 chương: dấu tiếng Việt đúng, không có khung cảnh báo ký tự lạ, ~270 ms lần đầu mở chương, khoảng 70 ms mỗi lần chuyển chương. `npm test` 32/32 và typecheck vẫn xanh.
+- Hộp bao 5 vùng (title 30 px, activity bar 48, sidebar 240, status 22) không đổi; minimap cũ 70 px do canvas tự vẽ được thay bằng minimap của Monaco.
+
+**Điểm kỹ thuật cần nhớ:**
+- Bộ xử lý phím nghe ở **giai đoạn capture** để thấy phím trước Monaco (Monaco chặn mũi tên khi có tiêu điểm); `isBare` coi ô nhập ẩn của Monaco (`.inputarea`) không phải ô văn bản. Thanh Find của Monaco vẫn là ô nhập nên gõ chữ trong đó không bị bắt làm phím tắt.
+- Đổi dòng: mọi ký tự xuống dòng trong đoạn (kể cả U+2028/2029) bị đổi thành khoảng trắng để dòng model khớp 1-1 với đoạn.
+- `unicodeHighlight` tắt hết, nếu không tiếng Việt/Trung bị vẽ khung "ký tự dễ nhầm".
+- Khi khôi phục vị trí, nếu layout chưa xong thì chờ (tối đa 20 khung hình) thay vì "khôi phục về 0" rồi ghi đè tiến độ thật.
+
+**Chưa kiểm chứng / còn lại:**
+- Chưa dựng image Docker thật (máy dev không có Docker); mới chạy lại đúng các bước của stage build trong thư mục sạch (`npm ci --ignore-scripts` → `build:server` → `build:monaco`). CI sẽ là lần đầu chạy thật.
+- Chưa thử trên tunnel thật: tải lần đầu ~0,7 MB nén.
+- Màu theme của Monaco đọc từ biến CSS lúc khởi tạo; khi làm EPR-22.11 (đổi theme) phải gọi `defineTheme` + `setTheme` lại.
+- Monaco chạy chỉ với đường Node/Docker và Worker (đã thêm bước build); các tính năng ở mục 14 (Extensions, bản đồ nhiệt…) chưa động tới.
