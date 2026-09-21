@@ -56,13 +56,13 @@ Trạng thái: ✅ xong + có test · ⏳ cần chủ hệ thống · 🔲 chưa
 | EPR-13 | P2 | `/healthz` kiểm tra DB thật + dung lượng đĩa; readiness dùng nó | S | ✅ | DB hỏng → 503 → pod ra khỏi Service |
 | EPR-14 | P2 | Cảnh báo đĩa sắp đầy (~80 MB/sách lớn) | S | 🔲 | Log `LOW DISK` (đã có) được đẩy thành cảnh báo qua hệ thống alert hiện có |
 | EPR-15 | P2 | Bỏ đường Cloudflare Worker (xem quyết định 1) | M | 🔲 | Ingest một request, xoá staging/multipart, `deploy.yml` |
-| EPR-16 | P3 | Nhiều người dùng / tìm kiếm toàn văn | L | 🔲 | Chỉ làm khi quyết định 2 đổi |
+| EPR-16 | P3 | Nhiều người dùng (tìm kiếm toàn văn đã chuyển sang EPR-22.5) | L | 🔲 | Chỉ làm khi quyết định 2 đổi |
 | EPR-17 | P1 | Tải lên theo mảnh 256 KB (thử lại từng mảnh, song song 3, có tiến độ, `complete` lặp lại an toàn) + báo rõ khi upload bị cắt | M | ✅ | File 22 MB qua trình duyệt thật, cố ý làm hỏng 4 mảnh (đứt kết nối ×2, 504, 429): vẫn ra đủ 2953 chương và đúng một cuốn sách; 6 test tích hợp |
 | EPR-18 | P1 | Phát hiện EPUB bị cụt (tải dở) **ngay trong trình duyệt** trước khi gửi byte nào, và server báo "cut off" thay vì `invalid zip data` | S | ✅ | File 22 MB thật: bản đủ qua, bản cắt còn 20 MiB bị chặn; 1 test tích hợp mới (32/32 xanh); đã chạy trên cụm (`b6b632d`) |
 | EPR-19 | P2 | **Nhập bản sao lưu vBook** (`.tar.zst`) qua web: sách có nội dung + tiến độ đọc (mục 13) | L | 🔲 | Nhập đúng file mẫu 14 sách/7 sách có chương; sách đã có không bị tạo trùng; tiến độ khớp; test bằng bản sao lưu giả nhỏ |
 | EPR-20 | P2 | **WebDAV chỉ đọc** để vBook duyệt và nhập sách từ EPUB reader (mục 13) | M | 🔲 | vBook trên điện thoại thấy danh sách và nhập được một cuốn; sai mật khẩu / thử quá nhiều lần bị chặn |
 | EPR-21 | P3 | Đưa **tiến độ đọc về vBook** bằng một bản sao lưu nhỏ mà vBook khôi phục ở chế độ gộp (mục 13) | M | 🔲 | Thử trên **bản sao/dữ liệu thử** trước; chỉ tính xong khi vBook trên điện thoại hiện đúng chương đã đọc mà không mất dữ liệu khác |
-| EPR-22 | P3 | Tính năng nên học từ vBook (mục 13.6): tải trước chương, sắp xếp kệ + %, nhắc nghỉ mắt, chủ đề màu, đồng bộ highlight/cài đặt lên server, biểu đồ hoạt động đọc, bookmark, nhập TXT chia chương, xuất sách | M–L | 🔲 | Chia 4 cụm, mỗi cụm có test riêng |
+| EPR-22 | P2 | 11 tính năng học từ vBook — **kế hoạch chi tiết ở mục 14** (EPR-22.1 … 22.11, 4 giai đoạn có cổng thoát) | M–L | 🔲 | Từng việc con có test riêng; cổng thoát của giai đoạn ở mục 14.5 |
 
 Sửa kèm theo: ghi tiến độ đọc cho sách không tồn tại giờ trả 404; đọc chương khi sách đang index dở trả 409 (trước đó có thể trả sai nội dung vì offset mới trỏ vào file cũ); so sánh mật khẩu bằng HMAC nên không lộ độ dài.
 
@@ -124,20 +124,20 @@ Toàn bộ quy trình này chạy tự động trong `tests/backup.test.ts` (bac
 
 ## 11. Việc còn lại — đã ghi, chưa làm (tạm hoãn theo yêu cầu 2026-09-20)
 
-Thứ tự đề xuất khi quay lại: EPR-02 → 05 → 07 → 14 → 15. EPR-16 chỉ khi quyết định 2 đổi. Nhóm tương thích vBook (mục 13) làm theo thứ tự EPR-19 → 20 → 21; EPR-22 độc lập.
+Thứ tự đề xuất khi quay lại: EPR-02 → 05 → 07 → 14 → 15. EPR-16 chỉ khi quyết định 2 đổi. Nhóm tương thích vBook (mục 13) làm theo thứ tự EPR-19 → 20 → 21; EPR-22 (mục 14) độc lập, trừ hai việc dùng chung bộ ghép EPUB với EPR-19.
 
 | ID | Ai làm | Cần gì để bắt đầu | Việc cụ thể |
 |---|---|---|---|
 | EPR-02 | Chủ hệ thống | Không cần gì thêm | Zero Trust → Access → Applications → thêm `vs.dophamnguyen.xyz`, policy cho email của bạn. Xong thì kiểm tra `curl -I https://vs.dophamnguyen.xyz/` bị chuyển tới trang đăng nhập Access |
-| EPR-05 | Cả hai | **Chọn nơi đặt bản sao**: (a) `rsync` `/backup` sang node khác qua Tailscale (rẻ nhất, dùng hạ tầng có sẵn, cần đường SSH/khoá giữa hai node), hoặc (b) bucket (R2 / Oracle Object Storage, cần khoá truy cập) | Viết bước sao chép ra ngoài node vào CronJob; sau đó **diễn tập khôi phục từ bản sao off-site** (chưa khôi phục thử được thì chưa tính là xong) |
+| EPR-05 | Cả hai | **Chọn nơi đặt bản sao**: (a) `rsync` `/backup` sang node khác qua Tailscale (rẻ nhất, dùng hạ tầng có sẵn, cần đường SSH/khoá giữa hai node), hoặc (b) bucket (R2 / Oracle Object Storage, cần khoá truy cập), hoặc (c) một máy chủ WebDAV bạn có (EPR-22.7, mục 14) | Viết bước sao chép ra ngoài node vào CronJob; sau đó **diễn tập khôi phục từ bản sao off-site** (chưa khôi phục thử được thì chưa tính là xong) |
 | EPR-07 | Chủ hệ thống | Tạo PAT fine-grained: Contents read & write trên `Npham140201/ci-cd-platform` | Lưu thành secret `CI_CD_PLATFORM_TOKEN` của repo EPUB Reader; job `pin-image` đã viết sẵn sẽ tự chạy. Kiểm tra: push một commit → xuất hiện commit "epub-reader: image ..." trong `ci-cd-platform` |
 | EPR-14 | Tôi | **Chọn hệ thống cảnh báo** (Beszel / eBOSS_LOG / Zalo). App đã ghi log `LOW DISK` khi dưới 10% và `/healthz` trả `disk.free_pct`; đĩa của PVC là đĩa của node, và Beszel đã theo dõi đĩa host nên có thể chỉ cần đặt ngưỡng ở đó | Nối log/số liệu vào cảnh báo, thử bằng cách hạ ngưỡng tạm để thấy cảnh báo bắn |
 | EPR-15 | Tôi | **Chốt quyết định 1**: không quay lại Cloudflare. Nên đợi vài tuần chạy ổn trên k3s rồi mới bỏ vì không quay lại được | Ingest một request; xoá staging/multipart trong `src/index.ts`; xoá `deploy.yml`, `scripts/upload-book.ts`, `wrangler.jsonc` và phụ thuộc `wrangler`; giữ test xanh |
-| EPR-16 | Tôi | Chỉ khi bạn muốn nhiều người dùng hoặc tìm kiếm toàn văn | Thêm `user_id` vào `books`/`progress` từ đầu, không vá |
+| EPR-16 | Tôi | Chỉ khi bạn muốn nhiều người dùng (tìm kiếm toàn văn giờ là EPR-22.5) | Thêm `user_id` vào `books`/`progress` từ đầu, không vá |
 | EPR-19 | Tôi | **Hai câu trả lời** ở mục 13.5 (sách đã có thì giữ hay tạo mới; điện thoại có Tailscale không). Có sẵn file mẫu để thử | Nút "Nhập bản sao lưu vBook" dùng đường upload theo mảnh; giải nén zstd theo luồng; ghép EPUB trong bộ nhớ rồi đưa qua đường nhập sách hiện có |
 | EPR-20 | Cả hai | Quyết định có mở WebDAV ra ngoài không (mục 13.4) | PROPFIND/GET chỉ đọc, mật khẩu riêng, giới hạn thử sai; dựng EPUB khi vBook tải (app không giữ file EPUB gốc) |
 | EPR-21 | Cả hai | Điện thoại để thử khôi phục; **làm sau EPR-19** | Sinh bản sao lưu tối thiểu; thử ở chế độ "Gộp" hoặc "Chỉ khôi phục phần thiếu" trên dữ liệu thử |
-| EPR-22 | Tôi | Chọn cụm bắt đầu (mục 13.6) | Bắt đầu với cụm 1 (nhỏ, thấy ngay) |
+| EPR-22 | Tôi | Chốt 5 quyết định ở mục 14.3 (đều đã có mặc định) | Bắt đầu với giai đoạn A (mục 14.5) |
 
 Việc chưa kiểm chứng cần nhớ: diễn tập khôi phục trên cụm chưa khởi động app trên dữ liệu đã khôi phục, và chưa đo RTO của cả runbook (mục 7).
 
@@ -207,7 +207,7 @@ vBook đẩy sao lưu lên WebDAV bằng **một request** (`PUT` cả file, tê
 1. **Sách vBook mà EPUB reader đã có** (ví dụ Trạch Nhật Phi Thăng nếu đã nhập): mặc định **giữ bản đang có và chỉ cập nhật tiến độ**; đổi sang "nhập thành bản mới" nếu bạn muốn.
 2. **Điện thoại có Tailscale (hoặc cài được) không?** Quyết định WebDAV có cần mở công khai hay không (EPR-20).
 
-### 13.6 Tính năng nên học từ vBook (EPR-22, đã đối chiếu với EPUB reader)
+### 13.6 Tính năng nên học từ vBook (EPR-22; **kế hoạch chi tiết ở mục 14**)
 
 Nguồn: chuỗi giao diện tiếng Việt và tên gói của vBook. Ý tưởng, không sao chép. Chia cụm:
 1. **Nhỏ, thấy ngay:** tải trước chương kế; kệ sắp theo đọc gần nhất + hiện % tiến độ; nhắc nghỉ mắt và "còn X phút trong chương"; chủ đề màu kiểu VS Code (Dark+/Light+/Monokai).
@@ -222,3 +222,83 @@ Không làm: dịch máy, OCR, đọc thành tiếng bằng AI, extension/chuy�
 - Chưa thử vBook thật với một máy chủ WebDAV nào, nên **cách vBook duyệt và nhập từ WebDAV** (`PROPFIND` độ sâu nào, yêu cầu đặc biệt nào) mới đoán qua tên lớp; EPR-20 phải kiểm chứng bằng điện thoại.
 - Chưa biết vBook khôi phục thế nào khi bản sao lưu chỉ có một phần dữ liệu (EPR-21).
 - Định dạng nội dung `raw.txt` chỉ thấy ở nguồn Tàng Thư Viện; nguồn khác có thể khác (thử với sách Truyện Full khi có nội dung).
+
+## 14. Kế hoạch: 11 tính năng học từ vBook (EPR-22.1 – 22.11, cộng 22.0 là bộ ghép EPUB dùng chung)
+
+Chỉ là kế hoạch, **chưa làm**. Ý tưởng lấy từ chuỗi giao diện của vBook; mọi thứ tự thiết kế và viết lại, không sao chép.
+
+### 14.1 Baseline đã xác minh trong code (2026-09-21)
+
+| Vùng | Hiện trạng | Hệ quả |
+|---|---|---|
+| Tiến độ | Bảng `progress` một dòng/sách; `POST /api/books/:id/progress` **ghi đè theo request cuối** (không so mốc thời gian). Client lưu sau 700 ms khi cuộn, và bằng `sendBeacon` khi ẩn tab | Hai thiết bị ghi đè nhau, tiến độ có thể lùi |
+| Highlight | `localStorage` khoá `devdocs.hl:<sách>:<chương>` = mảng `{p, start, end}` (đoạn + vị trí ký tự) | Không sang máy khác, mất khi xoá dữ liệu trình duyệt, **không nằm trong backup** |
+| Cài đặt | `localStorage` khoá `devdocs.settings`: `blurHide, camo, serif, readFocus, fontSize, readWidth, panicCode`; tab đang mở ở `devdocs.session` | Mỗi thiết bị một bộ |
+| Danh sách sách | `GET /api/books` không trả tiến độ; tiến độ chỉ có khi mở `/index` của từng sách | Explorer không hiện được % |
+| Giao diện | Màu là biến CSS ở `:root` (89 chỗ dùng `var(--…)`), màn hình boss key (`.panic`) dùng cùng biến | Đổi theme khá rẻ, nhưng **màn boss key phải đổi theo**, không thì hiện màn tối trong IDE sáng là lộ |
+| Chưa có | bookmark, thống kê, tìm kiếm (icon Search/Source Control ở activity bar chỉ để trang trí), theme, xuất sách, tải trước chương, nhập TXT | |
+| FTS5 | Đã thử: `node:sqlite` có FTS5; `unicode61 remove_diacritics 2` bỏ dấu tiếng Việt đúng (tìm "trach nhat" ra "Trạch Nhật") **trừ chữ đ** ("dao" không ra "đạo") | Cần đổi đ→d ở cả lúc lập chỉ mục lẫn lúc tìm. Thử lại trên Node 24 của image khi làm |
+
+### 14.2 Nguyên tắc
+
+- Dữ liệu người dùng (highlight, bookmark, cài đặt, thống kê) **sống ở SQLite trên server** để được backup; `localStorage` chỉ là bộ nhớ đệm/ngoại tuyến.
+- Migration chỉ **thêm** (bảng/cột mới), không sửa hay xoá cái cũ; dữ liệu cũ trong `localStorage` được **nhập lên server đúng một lần**, không mất.
+- Không thêm phụ thuộc nặng. Việc nào làm được hoàn toàn ở trình duyệt thì làm ở trình duyệt.
+- Không lộ vỏ ngụy trang: chữ mới dùng từ vựng của VS Code ("Activity", "Bookmarks", "Problems"…); mọi màn hình mới phải theo theme hiện tại, kể cả màn boss key.
+- Mỗi việc có test tích hợp như hiện nay, cộng kiểm tra bằng trình duyệt thật (Playwright) cho phần giao diện.
+
+### 14.3 Quyết định cần chốt (đã chọn mặc định, đổi được)
+
+1. **Chỉ cần chạy trên Docker/k3s.** Tính năng mới không bắt buộc chạy trên đường Cloudflare Worker (xem EPR-15); code Worker vẫn phải qua `typecheck`.
+2. **"Chỉ tiến" nghĩa là gì.** Lưu **hai** giá trị: *xa nhất* (`furthest_idx`, `furthest_ratio`; chỉ tăng, dùng cho % và cho vBook) và *vị trí hiện tại* (`chapter_idx`, `scroll_ratio`, kèm mốc thời gian của thiết bị, theo "mới hơn thắng"; dùng cho "tiếp tục đọc"). Nếu chỉ giữ xa nhất thì đọc lại chương cũ rồi mở lại sẽ nhảy về tận chương xa.
+3. **Cài đặt nào đồng bộ.** Tất cả trừ tab đang mở (theo thiết bị). `panicCode` và `blurHide` cũng đồng bộ (nằm sau đăng nhập; đổi ở một máy là đổi ở mọi máy).
+4. **Cách đo thời gian đọc.** Chỉ tính khi tab hiện, chưa boss key, và có cuộn/phím trong 60 giây gần nhất; không lưu nội dung nào. Gửi gộp mỗi 60 giây.
+5. **Nhập TXT.** Luôn **xem trước danh sách chương** trước khi nhập; nếu không nhận ra tiêu đề chương thì chia theo độ dài (mặc định ~20.000 ký tự) thay vì từ chối.
+
+### 14.4 Từng việc
+
+Effort: XS < 1 giờ · S 1–2 giờ · M nửa ngày · L nhiều ngày. Ước lượng thô, chưa có bằng chứng thực tế.
+
+| ID | Việc | Thiết kế | Dữ liệu / API | Nghiệm thu | Effort | Cần trước |
+|---|---|---|---|---|---|---|
+| 22.10 | Tải trước chương kế | Sau khi vẽ chương `idx`, lúc rảnh (`requestIdleCallback`) lấy `idx+1` vào bộ đệm nhỏ (3 chương). Bỏ qua khi tab ẩn/boss key | Không đổi server | Mở chương kế không thấy chờ; số request thừa không quá 1 chương | XS | — |
+| 22.9 | Kệ sách: sắp xếp + % | `GET /api/books` trả thêm `furthest_*` và `last_read_at`; Explorer có menu sắp xếp (đọc gần nhất / mới thêm / tên / %) và hiện % cạnh tên | JOIN `progress`; chưa cần cột mới nếu dùng vị trí hiện tại | Test: thứ tự đúng theo từng kiểu sắp; sách chưa đọc không lỗi | S | — (dùng cột `furthest_*` khi 22.1 xong) |
+| 22.4 | Nhắc nghỉ mắt + "còn X phút trong chương" | Bộ đếm thời gian đọc chủ động (dùng lại ở 22.3). Thời gian còn lại = ký tự còn lại ÷ tốc độ (mặc định 900 ký tự/phút, chỉnh được); hiện ở status bar. Nhắc dạng toast của VS Code sau 30/60/90 phút hoặc tắt | Chỉ `char_count` đã có trong `chapters` | Kiểm tra bằng trình duyệt thật: đếm đúng khi tab ẩn/boss key; nhắc hiện một lần rồi im | S | — |
+| 22.11 | Chủ đề màu | Bộ biến CSS thứ hai/ba: **Dark+** (mặc định), **Light+**, **Monokai**, thêm **AMOLED** (đen). Chọn trong Settings; màn `.panic` dùng cùng biến | `theme` là một khoá cài đặt (đồng bộ ở 22.1) | Playwright: từng theme không có chữ mất tương phản; **màn boss key đổi theo theme** | S | — |
+| 22.1 | Đồng bộ highlight / cài đặt / vị trí lên server, gộp "chỉ tiến" | Bảng `highlights(book_id, chapter_idx, p, start, end, created_at)`, `settings(key, value, updated_at)`; thêm cột `furthest_idx`, `furthest_ratio`, `client_ts` vào `progress`. Server: `furthest` chỉ tăng (so cặp chương, tỉ lệ); vị trí hiện tại ghi khi `client_ts` mới hơn. Highlight: thay cả tập của một chương theo "mới hơn thắng". Client: ghi ngay vào `localStorage`, đẩy lên nền, hàng đợi thử lại khi mất mạng; lần đầu đăng nhập thì nhập `localStorage` cũ lên (gộp, không ghi đè) | `GET/PUT /api/settings`; `GET /api/books/:id/highlights`; `PUT /api/books/:id/chapters/:idx/highlights`; `POST …/progress` nhận thêm `client_ts` (tương thích ngược) | Test hai "thiết bị" (hai cookie): ghi xen kẽ mà `furthest` không lùi; highlight tạo ở máy A hiện ở máy B; nhập `localStorage` cũ một lần và không nhân đôi; backup/restore mang theo cả highlight | M | — |
+| 22.6 | Bookmark | Bảng `bookmarks(id, book_id, chapter_idx, p, note, created_at)`; panel "Bookmarks" trong Explorer; phím tắt chọn phím chưa dùng (`Ctrl+B`, `Ctrl+Shift+U`, `Alt+←/→`, `Ctrl+Alt+T` đã bị chiếm). Khớp với `bookmarks.json` của vBook để EPR-19/21 nối được | `GET/POST/DELETE /api/books/:id/bookmarks` | Thêm/xoá/nhảy tới đúng đoạn; đồng bộ sang thiết bị khác | S | 22.1 |
+| 22.3 | Thống kê đọc + bản đồ nhiệt | Bảng `reading_hourly(day, hour, book_id, seconds, PRIMARY KEY(day, hour, book_id))`; client gửi gộp mỗi 60 giây. Panel "Activity" (dùng icon Source Control) vẽ lưới đóng góp kiểu GitHub, chuỗi ngày, giờ vàng, sách đọc nhiều nhất | `POST /api/stats/ping`; `GET /api/stats?from&to` | Test: cộng dồn đúng, chuỗi ngày qua nửa đêm; trình duyệt thật: lưới hiện đúng, không ghi khi tab ẩn | M | 22.4 (dùng chung bộ đếm) |
+| 22.0 | **Bộ ghép EPUB dùng chung** (chương → EPUB trong bộ nhớ) | Một hàm trong `src/` không phụ thuộc runtime, có unit test; là nền cho 22.2, 22.8 và EPR-19/20 | — | Sinh EPUB mà `parseEpubMeta` đọc lại đúng số chương/tên chương | S | — (làm trong EPR-19 hoặc ngay trước 22.2) |
+| 22.2 | Nhập TXT/HTML tự chia chương | Trình duyệt đọc file, tự đoán mã hoá (UTF-8 nghiêm ngặt, không được thì GB18030), chạy bộ luật **tự viết**: `Chương/Chuong/Hồi/Quyển/Phần + số/số La Mã/chữ`, `第…章/回/节`, `Chapter N`, cùng điều kiện dòng ngắn (≤ 60 ký tự), đứng riêng, có dòng trống trước. Hiện bản xem trước (số chương, chương ngắn/dài bất thường) rồi mới nhập; nếu không nhận ra thì chia theo độ dài. Ghép bằng 22.0 rồi đưa qua đường upload theo mảnh + ingest hiện có | Dùng `/api/uploads` sẵn có, không endpoint mới | Bộ test regex trên mẫu Việt/Trung/Anh và trường hợp lạ; nhập file TXT thật, ra đúng số chương | M | 22.0 |
+| 22.8 | Xuất sách (EPUB/TXT) | `GET /api/books/:id/export?format=epub\|txt&from&to`, đọc tuần tự từ `content.bin`. TXT gộp một file kèm mục lục; EPUB dựng bằng 22.0. **Tên file mặc định theo tên ngụy trang**, chỉ dùng tên thật khi `?real=1` | Không đổi DB | Xuất sách 2953 chương: mở lại được, số chương khớp; bộ nhớ không phình | S–M | 22.0 |
+| 22.5 | Tìm kiếm trong sách / toàn thư viện | Bảng ảo FTS5 `chapter_fts(book_id, idx, text)` với `unicode61 remove_diacritics 2`, **đổi đ→d ở cả hai phía**; lập chỉ mục lúc ingest và có nút "lập chỉ mục lại" cho sách cũ (dùng đường reindex). UI là ô Search của VS Code: kết quả dạng `tệp:dòng` kèm đoạn trích, bấm nhảy tới đoạn. Tìm cả trong bookmark | `GET /api/search?q&book&limit` | Test: bỏ dấu, chữ đ, cụm từ, sách đang index dở không lỗi; **đo dung lượng thêm** (dự kiến bằng cỡ văn bản, ~25 MB cho sách 2953 chương) và tốc độ trên sách lớn | L | — |
+| 22.7 | Sao lưu lên WebDAV | `backup.mjs` thêm bước đẩy bản sao lưu tới một URL WebDAV (thông tin trong SealedSecret), giữ N bản, xoá bản cũ; **diễn tập khôi phục từ WebDAV** rồi mới tính xong. Đây là phương án (c) của EPR-05 | Biến môi trường mới, không đổi DB | Backup → xoá sạch → khôi phục từ WebDAV → mọi chương khớp từng byte | M | ⏳ Bạn cho biết máy chủ WebDAV nào (Nextcloud, Synology, dịch vụ khác) |
+
+### 14.5 Lộ trình và cổng thoát
+
+| Giai đoạn | Việc | Cổng thoát (phải đạt mới sang giai đoạn sau) |
+|---|---|---|
+| **A — nhỏ, thấy ngay** | 22.10, 22.9, 22.4, 22.11 | `npm test` xanh; Playwright: tải trước không làm tăng lỗi, sắp xếp đúng, nhắc nghỉ đúng, mọi theme không vỡ và **boss key đổi theo theme** |
+| **B — nền đồng bộ** | 22.1 → 22.6 | Bài test hai thiết bị đạt; nhập `localStorage` cũ đúng một lần; restore từ backup mang theo highlight |
+| **C — dữ liệu mới** | 22.3, 22.0 → 22.2, 22.8 | Thống kê đúng qua nửa đêm; nhập TXT thật và xuất lại, số chương khớp |
+| **D — nặng / cần bạn** | 22.5, 22.7 | Đo dung lượng và tốc độ tìm kiếm trên sách lớn; diễn tập khôi phục từ WebDAV |
+
+Phụ thuộc: 22.6 cần 22.1; 22.3 dùng bộ đếm của 22.4; 22.2 và 22.8 cần 22.0. Nếu EPR-19 làm trước thì 22.0 nằm trong đó.
+
+### 14.6 Chỉ số nghiệm thu chung
+
+- Số test tăng theo từng việc; typecheck (Worker + server + tests) vẫn xanh.
+- Thời gian mở chương và mở sách **không tệ đi** so với trước khi làm (đo trước ở giai đoạn A).
+- Dung lượng dữ liệu tăng có kiểm soát: FTS5 (22.5) là thứ duy nhất tăng đáng kể, đo trước khi bật cho toàn thư viện.
+- Sau mỗi giai đoạn, kiểm tra tay một lượt các màn hình chính bằng trình duyệt thật ở cả chế độ ngụy trang và chế độ boss key.
+
+### 14.7 Rủi ro
+
+| Rủi ro | Cách giảm |
+|---|---|
+| Đồng bộ ghi đè dữ liệu cũ khi nhập `localStorage` lần đầu | Nhập theo kiểu **gộp** (highlight lấy hợp, cài đặt "mới hơn thắng"), có test; giữ bản `localStorage` cũ đến khi xác nhận |
+| Đổi theme làm lộ màn boss key hoặc chữ khó đọc | Cổng thoát A kiểm tra riêng; boss key dùng cùng biến màu |
+| Đo thời gian đọc thành "nhật ký hoạt động" đáng ngại | Chỉ lưu số giây theo (ngày, giờ, sách), không lưu nội dung; panel nằm sau đăng nhập, dùng icon vốn có |
+| Migration sai trên dữ liệu thật | Chỉ thêm cột/bảng; đã có backup hằng đêm và runbook khôi phục; thử migration trên bản restore trước |
+| FTS5 làm đầy đĩa hoặc chậm khi ingest | Đo trước; lập chỉ mục sau khi ingest xong (không chặn upload); cho tắt theo từng sách |
+| Regex nhận sai chương ở file TXT lạ | Luôn có bản xem trước, chia theo độ dài làm phương án dự phòng |
