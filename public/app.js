@@ -199,6 +199,12 @@ function getReader() {
       overviewRulerBorder: false,
       stickyScroll: { enabled: false },
       padding: { top: 4 },
+      // Off by default in Monaco: a plain mouse wheel sends one big, discrete
+      // delta per notch, and without this each notch jumps the page instantly
+      // — reads as janky/laggy next to a normal web page's inertial scroll.
+      // This animates each jump instead (our own W/S loop already moves
+      // smoothly frame-by-frame, so it isn't affected either way).
+      smoothScrolling: true,
       scrollbar: { useShadows: false, verticalScrollbarSize: 14, alwaysConsumeMouseWheel: false },
       // Vietnamese/Chinese text must not get "ambiguous character" boxes.
       unicodeHighlight: { ambiguousCharacters: false, invisibleCharacters: false, nonBasicASCII: false },
