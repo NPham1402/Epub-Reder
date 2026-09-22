@@ -64,7 +64,7 @@ const reader = {
   hl: null,       // decoration collections, recreated with each model
   focus: null,
   nav: null,
-  raf: 0,
+  focusTimer: 0,  // debounces paintFocus() until scrolling settles
 };
 
 // Monaco is ~3 MB, so it loads on first use (and is warmed up after login).
@@ -229,7 +229,14 @@ function getReader() {
       if (!e.scrollTopChanged || !state.current) return;
       updatePos();
       extEvent("scroll");
-      if (!reader.raf) reader.raf = requestAnimationFrame(() => { reader.raf = 0; paintFocus(); });
+      // Recomputing which paragraph is "being read" costs a decoration update
+      // and a CSS repaint across the visible lines; doing that on every single
+      // scroll frame (once per ~16ms while scrolling) is needless work and,
+      // worse, makes the dim/bright boundary flicker between paragraphs while
+      // the page is moving — distracting rather than useful, since nobody is
+      // reading mid-scroll. Wait for scrolling to settle instead.
+      clearTimeout(reader.focusTimer);
+      reader.focusTimer = setTimeout(paintFocus, 120);
       clearTimeout(state.saveTimer);
       state.saveTimer = setTimeout(() => saveProgress(view.ratio), 700);
     });
