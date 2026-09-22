@@ -500,6 +500,19 @@ function renderTree() {
   $("#sb-footer").textContent = `${n} module${n === 1 ? "" : "s"}`;
 }
 
+// "Auto reveal": scroll the Explorer so the file for the chapter you just
+// opened is in view, the way VS Code keeps the active file visible when you
+// switch tabs. Only called on navigation (never while just browsing the tree,
+// which would otherwise fight the reader's own scrolling), and it's a no-op
+// while the Explorer view is hidden — .sb-view's layout collapses under
+// [hidden], so there is nothing to measure until it is shown again.
+function revealActiveInTree() {
+  const row = $(".tree-row.active");
+  const pane = $("#view-explorer .sb-section");
+  if (!row || !pane || pane.offsetParent === null) return;
+  row.scrollIntoView({ block: "nearest" });
+}
+
 async function toggleBook(bookId) {
   const book = bookById(bookId);
   if (!book) return;
@@ -555,6 +568,7 @@ async function activate(key) {
   if (state.activeKey !== key) return; // superseded while the editor was loading
   renderTabs();
   renderTree();
+  revealActiveInTree();
   renderBreadcrumbs();
   updateStatusFile();
   restoreScroll(key, book, idx);
@@ -1158,7 +1172,10 @@ function toggleReveal() {
 $("#btn-reveal").addEventListener("click", toggleReveal);
 
 /* ============================ Sidebar / panic ============================= */
-function toggleSidebar() { $("#sidebar").classList.toggle("hidden"); }
+function toggleSidebar() {
+  const nowHidden = $("#sidebar").classList.toggle("hidden");
+  if (!nowHidden) revealActiveInTree(); // catch up if a chapter was opened while collapsed
+}
 
 let panicVisible = false;
 let panicBuffer = "";

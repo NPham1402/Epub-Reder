@@ -65,6 +65,9 @@ function setSideView(v) {
   for (const id of ["explorer", "search", "scm", "run", "extensions"]) $("#view-" + id).hidden = id !== v;
   document.querySelectorAll(".activitybar .ab-icon[data-view]").forEach((i) => i.classList.toggle("active", i.dataset.view === v));
   if (v === "extensions") renderExtList();
+  // The reveal in activate() is a no-op while this view was hidden (nothing to
+  // measure); catch up now that it has real layout again.
+  if (v === "explorer" && typeof revealActiveInTree === "function") revealActiveInTree();
 }
 document.querySelectorAll(".activitybar .ab-icon[data-view]").forEach((icon) => {
   icon.addEventListener("click", () => {
