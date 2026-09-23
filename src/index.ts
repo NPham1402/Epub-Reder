@@ -286,6 +286,7 @@ app.use("*", secureHeaders({
   contentSecurityPolicy: {
     defaultSrc: ["'self'"],
     scriptSrc: ["'self'"],
+    workerSrc: ["'self'"], // the offline-reading service worker
     styleSrc: ["'self'", "'unsafe-inline'"],
     imgSrc: ["'self'", "data:"],
     fontSrc: ["'self'", "data:"],

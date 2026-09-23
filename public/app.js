@@ -347,9 +347,48 @@ async function api(path, opts = {}) {
   });
 }
 
+/* ============================ Offline ======================================= */
+// Caches the app shell and whatever books/chapters have been opened (see
+// sw.js), so a dropped connection doesn't lose the page or previously-read
+// content. Signing out clears the cache too — offline access must not outlive
+// the session.
+if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+// Must match sw.js's DATA_CACHE — extensions.js writes into it directly for
+// the "download for offline" action (see the Library extension).
+const OFFLINE_DATA_CACHE = "epub-reader-data-v1";
+async function clearOfflineCache() {
+  if (!("caches" in window)) return;
+  try { await Promise.all((await caches.keys()).map((n) => caches.delete(n))); } catch { /* best-effort */ }
+}
+function setOfflineBadge(off) {
+  const s = $("#st-sync");
+  if (!s) return;
+  s.classList.toggle("codicon-debug-disconnect", off);
+  s.classList.toggle("codicon-sync", !off);
+  if (off) s.title = "Offline — showing what's already been opened; changes will send once you're back online";
+  else if (s.title.startsWith("Offline")) s.title = "Sync";
+}
+window.addEventListener("online", () => {
+  setOfflineBadge(false);
+  if (typeof flushProgressQueue === "function") flushProgressQueue();
+  if (typeof syncNow === "function") syncNow();
+});
+window.addEventListener("offline", () => setOfflineBadge(true));
+
 /* ============================ Boot / auth ================================== */
 async function boot() {
-  const res = await api("/api/books");
+  setOfflineBadge(!navigator.onLine); // runs after injectIcons() has set the icon's base class
+  let res;
+  try {
+    res = await api("/api/books");
+  } catch {
+    // No network and nothing the service worker could serve from cache — the
+    // very first visit has to happen online at least once.
+    $("#login-error").hidden = false;
+    $("#login-error").textContent = "Offline, and nothing has been opened on this device yet — connect once to get started.";
+    showLogin();
+    return;
+  }
   if (res.status === 401) { showLogin(); return; }
   const data = await res.json();
   state.books = data.books || [];
@@ -360,6 +399,7 @@ async function boot() {
   const warm = () => ensureMonaco().catch(() => {});
   if ("requestIdleCallback" in window) requestIdleCallback(warm); else setTimeout(warm, 1500);
   if (typeof syncBoot === "function") syncBoot();
+  if (navigator.onLine) flushProgressQueue();
 }
 
 function showLogin() {
@@ -480,6 +520,7 @@ function renderTree() {
   tree.innerHTML = "";
   for (const book of state.books) {
     const node = el("div", "tree-book");
+    node.dataset.bookId = book.id;
     const row = el("div", "tree-row");
     const open = state.expanded.has(book.id);
     const caret = el("span", "tree-caret " + codiCls(open ? "chevron-down" : "chevron-right"));
@@ -835,14 +876,25 @@ function noteFurthest(book, idx, ratio) {
   const f = book._furthest || (book.furthest_idx != null ? { idx: book.furthest_idx, ratio: book.furthest_ratio || 0 } : null);
   if (!f || idx > f.idx || (idx === f.idx && ratio > f.ratio)) book._furthest = { idx, ratio };
 }
+// A progress report sent while offline is queued (one pending report per
+// book — only the latest position matters) and flushed on reconnect, so
+// reading through a dead connection still catches the server up afterward.
+const PROGRESS_Q_KEY = "devdocs.progressq";
+const progressQueue = (() => { try { return JSON.parse(localStorage.getItem(PROGRESS_Q_KEY) || "{}"); } catch { return {}; } })();
+const persistProgressQueue = () => localStorage.setItem(PROGRESS_Q_KEY, JSON.stringify(progressQueue));
+async function sendProgress(bookId, body) {
+  const res = await api(`/api/books/${bookId}/progress`, { method: "POST", body: JSON.stringify(body) }).catch(() => null);
+  if (res && res.ok) { delete progressQueue[bookId]; persistProgressQueue(); }
+  else { progressQueue[bookId] = body; persistProgressQueue(); }
+}
+async function flushProgressQueue() {
+  for (const [bookId, body] of Object.entries(progressQueue)) await sendProgress(bookId, body);
+}
 async function saveProgress(ratio) {
   if (!state.current) return;
   const book = state.current.book;
   if (book) { book._progress = { chapter_idx: state.current.idx, scroll_ratio: ratio }; book.last_read_at = Date.now(); noteFurthest(book, state.current.idx, ratio); }
-  api(`/api/books/${state.current.bookId}/progress`, {
-    method: "POST",
-    body: JSON.stringify({ chapter_idx: state.current.idx, scroll_ratio: ratio, client_ts: Date.now() }),
-  }).catch(() => {});
+  await sendProgress(state.current.bookId, { chapter_idx: state.current.idx, scroll_ratio: ratio, client_ts: Date.now() });
 }
 function beaconProgress() {
   if (!state.current) return;
@@ -1161,10 +1213,15 @@ async function rerender() {
   await renderContent(ch);
   view.top = top;
 }
-$("#btn-logout").addEventListener("click", async () => { await api("/api/logout", { method: "POST" }); location.reload(); });
+$("#btn-logout").addEventListener("click", async () => {
+  await api("/api/logout", { method: "POST" }).catch(() => {});
+  await clearOfflineCache();
+  location.reload();
+});
 $("#btn-logout-all").addEventListener("click", async () => {
   if (!confirm("Sign out of every device, including this one?")) return;
-  await api("/api/logout-all", { method: "POST" });
+  await api("/api/logout-all", { method: "POST" }).catch(() => {});
+  await clearOfflineCache();
   location.reload();
 });
 

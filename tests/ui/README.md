@@ -13,6 +13,11 @@ node --disable-warning=ExperimentalWarning tests/ui/sync.mjs         # two devic
 node --disable-warning=ExperimentalWarning tests/ui/insights.mjs     # Activity Insights: what is counted, streaks, heat map
 node --disable-warning=ExperimentalWarning tests/ui/import-export.mjs # .txt import with preview, Library export
 node --disable-warning=ExperimentalWarning tests/ui/search.mjs        # Global Search: indexing, accents, jump to the paragraph
+node --disable-warning=ExperimentalWarning tests/ui/explorer-reveal.mjs # Explorer auto-scrolls to the active chapter, like VS Code
+node --disable-warning=ExperimentalWarning tests/ui/scroll-smooth.mjs # reading-focus dim only recomputes once scrolling settles
+node --disable-warning=ExperimentalWarning tests/ui/wheel-smooth.mjs  # a mouse-wheel notch animates instead of jumping
+node --disable-warning=ExperimentalWarning tests/ui/pwa-install.mjs   # manifest + icons Edge/Chrome need for "Install app"
+node --disable-warning=ExperimentalWarning tests/ui/offline.mjs       # true network-cut offline reading, download-for-offline, logout clears it
 node --disable-warning=ExperimentalWarning tests/ui/layout.mjs capture   # once, on a known-good build
 node --disable-warning=ExperimentalWarning tests/ui/layout.mjs compare   # after a UI change: the shell must not move
 ```

@@ -529,8 +529,15 @@ kbd {
 /* Library export buttons */
 .lib-acts { display: inline-flex; gap: 6px; opacity: 0; }
 .lib-row:hover .lib-acts { opacity: 1; }
-.lib-btn { padding: 2px 8px; font-size: 11px; border: 1px solid var(--input-border); border-radius: 3px; color: var(--fg); text-decoration: none; background: var(--input-bg); }
+.lib-btn { padding: 2px 8px; font-size: 11px; border: 1px solid var(--input-border); border-radius: 3px; color: var(--fg); text-decoration: none; background: var(--input-bg); font-family: inherit; cursor: pointer; }
 .lib-btn:hover { background: var(--btn-hover-bg); }
+.lib-btn:disabled { opacity: 0.6; cursor: default; }
+.lib-offline { display: inline-flex; align-items: center; }
+.lib-offline .ico { font-size: 13px !important; }
+.lib-offline.on { border-color: var(--focus-border); color: var(--focus-border); }
+
+/* Offline status in the status bar */
+.st-item.codicon-debug-disconnect { color: #e2b93d; }
 
 /* Import preview (text files) */
 .upload-preview { margin: 0 20px 20px; padding: 12px 14px; border: 1px solid var(--widget-border); border-radius: 6px; font-size: 13px; }

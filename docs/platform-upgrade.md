@@ -1,6 +1,6 @@
 # Kế hoạch nâng cấp nền tảng — EPUB Reader
 
-> Ngày: 2026-09-20 · Trạng thái: **13/21 mục backlog đang theo dõi đã xong và có test (EPR-02 đã bỏ theo quyết định 2026-09-21; EPR-22 xong, riêng 22.7 chờ Secret WebDAV); 2 mục cần chủ hệ thống (mục 9); 6 mục chưa làm (EPR-14, 15, 16, 19, 20, 21).** Sự cố upload ngày 2026-09-20 ở mục 12; kế hoạch tương thích với app vBook trên điện thoại ở mục 13.
+> Ngày: 2026-09-20 · Trạng thái: **15/23 mục backlog đang theo dõi đã xong và có test (EPR-02 đã bỏ theo quyết định 2026-09-21; EPR-22 xong, riêng 22.7 chờ Secret WebDAV; EPR-23, 24 mới thêm 2026-09-23 — cài thành app Windows + đọc offline); 2 mục cần chủ hệ thống (mục 9); 6 mục chưa làm (EPR-14, 15, 16, 19, 20, 21).** Sự cố upload ngày 2026-09-20 ở mục 12; kế hoạch tương thích với app vBook trên điện thoại ở mục 13.
 >
 > Phương pháp lấy từ `Worker_Zalo/docs/platform-upgrade/` (baseline có bằng chứng → ưu tiên P0–P3 → quyết định cần chốt → lộ trình có cổng thoát → backlog có ID → chỉ số nghiệm thu → sổ rủi ro), thu nhỏ cho dự án một người: một file thay vì tám.
 
@@ -63,6 +63,9 @@ Trạng thái: ✅ xong + có test · ⏳ cần chủ hệ thống · 🔲 chưa
 | EPR-20 | P2 | **WebDAV chỉ đọc** để vBook duyệt và nhập sách từ EPUB reader (mục 13) | M | 🔲 | vBook trên điện thoại thấy danh sách và nhập được một cuốn; sai mật khẩu / thử quá nhiều lần bị chặn |
 | EPR-21 | P3 | Đưa **tiến độ đọc về vBook** bằng một bản sao lưu nhỏ mà vBook khôi phục ở chế độ gộp (mục 13) | M | 🔲 | Thử trên **bản sao/dữ liệu thử** trước; chỉ tính xong khi vBook trên điện thoại hiện đúng chương đã đọc mà không mất dữ liệu khác |
 | EPR-22 | P2 | 11 tính năng học từ vBook — **kế hoạch chi tiết ở mục 14** (EPR-22.0 … 22.12, 4 giai đoạn có cổng thoát; **mọi giao diện phụ trợ nằm trong view Extensions**) | M–L | ✅ | Từng việc con có test riêng; cổng thoát của giai đoạn ở mục 14.5 |
+
+| EPR-23 | P2 | Cài thành app Windows ("Install app" trên Edge/Chrome): manifest + icon | S | ✅ | Xem mục 15 |
+| EPR-24 | P2 | Đọc offline: shell + sách đã mở/đã tải vẫn đọc được khi mất mạng thật | M | ✅ | Xem mục 15 |
 
 Sửa kèm theo: ghi tiến độ đọc cho sách không tồn tại giờ trả 404; đọc chương khi sách đang index dở trả 409 (trước đó có thể trả sai nội dung vì offset mới trỏ vào file cũ); so sánh mật khẩu bằng HMAC nên không lộ độ dài.
 
@@ -402,3 +405,42 @@ kubectl -n epub-reader create secret generic epub-reader-offsite --dry-run=clien
 ```
 
 rồi thêm khối `envFrom` (đã có sẵn trong `deploy/k8s/cronjob-backup.yaml`, `secretRef` tuỳ chọn) vào `apps/epub-reader/cronjob-backup.yaml` của `ci-cd-platform`. Tuỳ chọn: `BACKUP_WEBDAV_DIR` (mặc định `epub-reader`), `BACKUP_WEBDAV_KEEP`. Khôi phục trên máy trống: `node backup.mjs restore-webdav` (cùng các biến môi trường, `DATA_DIR` và `BACKUP_DIR` trống). **Chưa thử trên máy chủ WebDAV thật nào**, chỉ trên máy chủ giả; lần đầu nên chạy tay một Job và thử khôi phục vào thư mục tạm. EPR-05 chưa tính là xong cho đến khi khôi phục thử từ bản off-site thành công trên cụm.
+
+## 15. Cài thành app Windows + đọc offline (2026-09-23, EPR-23/24)
+
+Theo yêu cầu: "làm cho website có thể download as app trên window đi và có icon vscode", sau đó "tối ưu cho việc đọc offline đi". Cả hai dùng chung cơ chế web chuẩn (Web App Manifest + Service Worker), không cần đóng gói .exe, không qua cửa hàng ứng dụng.
+
+### 15.1 Cài như app Windows (EPR-23)
+
+- `public/manifest.webmanifest`: tên hiển thị **"devdocs — workspace"** / short name **"devdocs"** — giữ đúng vỏ ngụy trang, không có chữ "epub/ebook/sách/truyện/reader" ở bất kỳ đâu (có test canh chuyện này). `display: "standalone"` (mở như cửa sổ riêng, không thanh địa chỉ).
+- Icon: dùng lại đúng SVG logo VS Code app đã có sẵn (dùng làm favicon và logo trong app), dựng thành PNG 192/512 (và một bản 512 "maskable" có nền, nằm gọn vùng an toàn) bằng Playwright chụp lại SVG — không tải icon thật của Microsoft, không thêm rủi ro bản quyền ngoài cái đã có sẵn trong repo.
+- **Cố tình không khai báo `window-controls-overlay`**: tính năng này cho phép thanh tiêu đề giả của app "dính" vào cụm nút thu nhỏ/đóng thật của Windows (giống VS Code thật hơn nữa), nhưng cần CSS/JS riêng để không bị hai bộ nút đè lên nhau, và **không thể tự kiểm chứng bằng test tự động** (chỉ hiện khi thật sự cài đặt, trình duyệt headless không mô phỏng được). Không làm để tránh rủi ro chưa kiểm chứng được; `display: standalone` (cửa sổ riêng, thanh tiêu đề thật của Windows) là an toàn và đã kiểm chứng.
+- Đổi theme (Dark+/Light+/Monokai/AMOLED) cũng đổi màu `<meta name="theme-color">` theo `--titlebar-bg`.
+- Kiểm chứng: `tests/ui/pwa-install.mjs` (13 test) gọi đúng CDP `Page.getAppManifest` — API Chrome dùng để tự đọc manifest — xác nhận **0 lỗi phân tích cú pháp**; kiểm tra icon là PNG thật, kích thước hợp lý; kiểm tra không lộ từ ngữ liên quan sách.
+- **Chưa kiểm chứng**: bấm "Install app" thật trên Edge/Chrome thật (test tự động chỉ xác nhận manifest hợp lệ, không tự bấm nút cài đặt của trình duyệt).
+
+### 15.2 Đọc offline (EPR-24)
+
+`public/sw.js` (service worker) + 2 cache:
+- **SHELL** (mã của app: html/js/css/font/Monaco): "stale-while-revalidate" — trả ngay từ cache (nhanh, chạy offline), đồng thời âm thầm tải bản mới cho lần sau. Không cần liệt kê danh sách file cố định: file nào người dùng thật sự tải trong một lần online sẽ tự vào cache — đúng những gì trang dùng, không thiếu sót.
+- **DATA** (`/api/books`, `/api/books/:id/index`, `/api/books/:id/chapters/:idx` — ba endpoint tạo nên "một cuốn sách"): "network-first" — luôn thử mạng trước, lỗi thì mới lấy bản cũ trong cache. Các endpoint khác (settings, highlights, bookmarks, search, stats, upload, export, auth) **cố tình không cache** — phần lớn có hàng đợi thử lại riêng (`sync.js`), hoặc cache một kết quả tìm kiếm/API cũ sẽ gây hiểu lầm hơn là có ích.
+- **Đọc offline "tự nhiên"**: chương nào từng mở sẽ tự vào cache (kể cả 2 chương lân cận nhờ tải trước sẵn có).
+- **Tải trước cả cuốn**: nút "Offline" trên mỗi dòng ở trang **Library**, tải tuần tự (3 luồng song song, giống cách lập chỉ mục tìm kiếm) toàn bộ chương của một sách, ghi thẳng vào cache DATA từ phía trang (không qua service worker) — tránh trường hợp hiếm gặp ở lần dùng đầu tiên khi service worker chưa kịp "kiểm soát" trang.
+- **Tiến độ đọc khi mất mạng không bị mất**: thêm hàng đợi giống cơ chế đã có cho highlight/cài đặt — gửi tiến độ thất bại thì lưu lại, gửi lại khi có mạng.
+- **Đăng xuất xoá sạch cache offline**: nếu không làm việc này, sách đã tải offline vẫn đọc được **sau khi đăng xuất, miễn đang mất mạng** (service worker phục vụ từ cache mà không hỏi lại server) — vi phạm đúng thứ mà passcode + boss key + ẩn tên thật đang cố bảo vệ. "Sign out" và "Sign out everywhere" giờ xoá cache DATA trước khi tải lại trang. Cache SHELL (chỉ là mã app, không phải nội dung riêng tư) thì để tự nạp lại bình thường — màn đăng nhập cũng cần chạy offline được.
+- Chỉ báo "Offline" ở status bar (đổi icon `sync` → `debug-disconnect`, màu vàng) theo sự kiện `online`/`offline` của trình duyệt.
+- CSP: thêm `worker-src 'self'` (trước đó không khai báo; một số trình duyệt cũ cần khai rõ thay vì dựa vào suy ra từ `script-src`).
+
+**Kiểm chứng (`tests/ui/offline.mjs`, 13 test, dùng `context.setOffline(true)` — cắt mạng thật, không chỉ giả lập fetch lỗi):**
+- Shell tự chạy khi mất mạng thật; chương đã mở trước đó đọc lại đúng; chương đã bấm "Offline" tải trước (chưa từng mở) cũng đọc được; **một cuốn sách khác chưa từng đụng tới thì đúng là không đọc được offline** (không phải mọi thứ tự nhiên có sẵn).
+- Cuộn khi mất mạng vẫn ghi tiến độ vào hàng đợi; có mạng lại thì gửi đi và hàng đợi rỗng.
+- **Đăng xuất xoá sạch cache DATA** (nội dung sách) — xác nhận bằng cách mất mạng ngay sau khi đăng xuất rồi kiểm tra cache rỗng; cache SHELL (mã app) thì vẫn còn, đúng như thiết kế.
+- Bấm "Offline" lần nữa để bỏ tải trước thì cache của đúng cuốn đó bị xoá.
+
+**Lỗi tìm thấy trong lúc làm (đã sửa, không phải trong sản phẩm — trong chính quá trình viết code):**
+- Gửi tin nhắn cho service worker để xoá cache rồi `location.reload()` ngay — không đợi worker xử lý xong, nên đôi khi cache chưa kịp xoá đã tải lại trang. Sửa: trang tự xoá Cache Storage trực tiếp (API này gọi được thẳng từ trang, không bắt buộc qua service worker) rồi mới `await` xong mới tải lại.
+- Một bài test tra ngay `.gs-status` (trạng thái lập chỉ mục tìm kiếm) trước khi lần gọi API riêng của nó kịp xong — sai của bài test, không phải app; việc đăng ký service worker toàn cục khiến độ trễ mạng lệch nhẹ và làm lộ race có sẵn này ra.
+
+**Chưa kiểm chứng:**
+- Chưa thử trên máy Windows thật (chỉ Chromium headless). Bạn nên tự mở lại trang, bấm icon "Install app" ở thanh địa chỉ Edge/Chrome, thử tắt Wi-Fi rồi mở app đã cài để xác nhận cảm nhận thực tế.
+- `window-controls-overlay` (thanh tiêu đề giống VS Code thật hơn) cố tình chưa làm, xem 15.1.

@@ -210,6 +210,19 @@ npm run dev
 | `Ctrl/Cmd + =` / `-`   | Font size                       |
 | `Alt + ← / →`          | Previous / next chapter         |
 
+## Installing as an app, and reading offline
+
+Edge/Chrome offer **Install app** (icon in the address bar) — this runs the page as
+its own window, with its own Start Menu/taskbar entry and icon, no address bar.
+The icon is the same VS Code logo the page already uses.
+
+Once installed (or even just visited once), a service worker (`public/sw.js`) keeps
+the app itself and any book/chapter you've opened available with no network at all.
+To make a whole book available before you know you'll be offline, open the
+**Library** extension (Extensions view in the activity bar) and click **Offline**
+next to it — it downloads every chapter. **Sign out** clears that cache, so signing
+out really signs out even offline.
+
 ## Notes & limits
 
 - Images inside EPUBs are stripped (text-only) — this keeps the "docs" disguise clean.

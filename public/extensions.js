@@ -218,6 +218,50 @@ async function openBookFromLibrary(b) {
   renderTree();
   openTab(b.id, b._progress ? b._progress.chapter_idx || 0 : 0);
 }
+
+/* ---- Offline copies --------------------------------------------------------- */
+// Reading already caches whatever chapter you open (see sw.js); this instead
+// fetches every chapter of a module up front, so it is fully available before
+// you lose the connection on purpose (e.g. before a flight). Writes straight
+// into the same cache the service worker reads from, so it works even in the
+// brief window right after the very first visit, before the worker has taken
+// over the page.
+async function offlineCounts(books) {
+  const map = new Map();
+  if (!("caches" in window)) return map;
+  const cache = await caches.open(OFFLINE_DATA_CACHE).catch(() => null);
+  if (!cache) return map;
+  const paths = (await cache.keys()).map((k) => new URL(k.url).pathname);
+  for (const b of books) map.set(b.id, paths.filter((p) => p.startsWith(`/api/books/${b.id}/chapters/`)).length);
+  return map;
+}
+async function downloadForOffline(book, onProgress) {
+  if (!("caches" in window) || !(await loadBookIndex(book))) return false;
+  const cache = await caches.open(OFFLINE_DATA_CACHE);
+  const total = book._chapters.length;
+  let done = 0, failed = false, next = 0;
+  await Promise.all(Array.from({ length: Math.min(3, total) }, async () => {
+    while (next < total && !failed) {
+      const url = `/api/books/${book.id}/chapters/${next++}`;
+      try {
+        const res = await fetch(url, { credentials: "same-origin" });
+        if (!res.ok) throw new Error("http " + res.status);
+        await cache.put(url, res.clone());
+      } catch { failed = true; }
+      onProgress(++done, total);
+    }
+  }));
+  const idxUrl = `/api/books/${book.id}/index`;
+  const idxRes = await fetch(idxUrl, { credentials: "same-origin" }).catch(() => null);
+  if (idxRes && idxRes.ok) await cache.put(idxUrl, idxRes.clone());
+  return !failed;
+}
+async function removeOffline(book) {
+  if (!("caches" in window)) return;
+  const cache = await caches.open(OFFLINE_DATA_CACHE);
+  const prefix = `/api/books/${book.id}/`;
+  await Promise.all((await cache.keys()).filter((k) => new URL(k.url).pathname.startsWith(prefix)).map((k) => cache.delete(k)));
+}
 registerExtension({
   id: "library",
   name: "Library",
@@ -239,7 +283,7 @@ registerExtension({
     body.appendChild(bar);
     const list = el("div", "lib-list");
     body.appendChild(list);
-    const draw = () => {
+    const draw = async () => {
       const by = sel.value;
       const books = [...state.books].sort((a, b) => {
         if (by === "name") return bookLabel(a).localeCompare(bookLabel(b));
@@ -247,11 +291,13 @@ registerExtension({
         if (by === "progress") return bookPercent(b) - bookPercent(a);
         return (b.last_read_at || 0) - (a.last_read_at || 0) || (b.created_at || 0) - (a.created_at || 0);
       });
+      const offline = await offlineCounts(books);
       list.innerHTML = "";
       if (!books.length) list.appendChild(el("p", "xp-off", "No modules yet. Import an .epub to get started."));
       for (const b of books) {
         const pct = Math.round(bookPercent(b) * 100);
         const row = el("div", "lib-row");
+        row.dataset.bookId = b.id;
         row.appendChild(el("span", "lib-ico " + codiCls("folder")));
         const info = el("div", "lib-info");
         info.appendChild(el("div", "lib-name", bookLabel(b)));
@@ -273,6 +319,24 @@ registerExtension({
           a.title = `Export as .${fmt}`;
           a.addEventListener("click", (e) => e.stopPropagation());
           acts.appendChild(a);
+        }
+        if ("caches" in window) {
+          const have = offline.get(b.id) || 0;
+          const full = b.chapter_count > 0 && have >= b.chapter_count;
+          const off = el("button", "lib-btn lib-offline" + (full ? " on" : ""));
+          off.type = "button";
+          off.appendChild(el("span", "ico " + codiCls(full ? "cloud" : "cloud-download")));
+          off.appendChild(document.createTextNode(full ? " Offline" : have > 0 ? ` ${Math.round((have / b.chapter_count) * 100)}%` : " Offline"));
+          off.title = full ? "Available offline — click to remove the offline copy" : "Download every file for offline reading";
+          off.addEventListener("click", async (e) => {
+            e.stopPropagation();
+            if (full) { await removeOffline(b); draw(); return; }
+            off.disabled = true;
+            const label = off.lastChild;
+            await downloadForOffline(b, (done, total) => { label.textContent = ` ${Math.round((done / total) * 100)}%`; });
+            draw();
+          });
+          acts.appendChild(off);
         }
         row.appendChild(acts);
         row.addEventListener("click", () => openBookFromLibrary(b));
@@ -408,6 +472,10 @@ function applyTheme() {
   if (t.id === "dark") delete root.dataset.theme;
   else root.dataset.theme = t.id;
   root.style.colorScheme = t.kind;
+  // Installed-app title bar (Windows Window Controls Overlay) and, on other
+  // platforms that read it, the OS chrome around the page.
+  const meta = $("#meta-theme-color");
+  if (meta) meta.content = getComputedStyle(root).getPropertyValue("--titlebar-bg").trim() || "#3c3c3c";
   // The editor keeps its own theme object: rebuild it from the new colors.
   if (window.monaco && typeof defineReaderTheme === "function") {
     defineReaderTheme(window.monaco);

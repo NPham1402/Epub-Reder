@@ -56,6 +56,9 @@ try {
 
   await showExt("Global Search");
   await page.waitForSelector(".gs-input");
+  // The status starts as "Checking the index…" until its own async fetch
+  // resolves; wait for that to settle instead of racing it.
+  await page.waitForFunction(() => !document.querySelector(".gs-status").textContent.includes("Checking"), null, { timeout: 5000 });
   check("the page says everything is indexed", (await page.textContent(".gs-status")).includes("1 module indexed"), await page.textContent(".gs-status"));
 
   // Accent-insensitive search, đ included
