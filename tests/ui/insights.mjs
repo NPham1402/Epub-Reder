@@ -41,12 +41,12 @@ try {
 
   // ...idle time and the cover screen are not.
   await page.keyboard.press("\\");
-  await page.waitForSelector("#panic:not([hidden])");
+  await page.waitForSelector("#panic-editor:not([hidden])");
   const beforePanic = await pendingSeconds();
   for (let i = 0; i < 3; i++) { await page.mouse.move(500 + i, 320); await page.waitForTimeout(1000); }
   check("nothing is counted behind the cover screen", (await pendingSeconds()) === beforePanic, `${beforePanic} -> ${await pendingSeconds()}`);
   await page.keyboard.type("unlock");
-  await page.waitForSelector("#panic", { state: "hidden" });
+  await page.waitForSelector("#panic-editor", { state: "hidden" });
 
   // Flush and read back
   await page.evaluate(() => actFlush());

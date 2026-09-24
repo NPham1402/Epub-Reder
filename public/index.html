@@ -117,6 +117,17 @@
               </div>
               <div class="monaco-host" id="monaco-host" hidden></div>
               <div class="ext-page" id="ext-page" hidden></div>
+              <!-- Boss-key cover: swapped in over just this pane (title bar,
+              activity bar, sidebar chrome and status bar stay exactly as
+              they were), so switching to it looks like changing files, not
+              like the whole window changing shape. -->
+              <div class="panic-editor" id="panic-editor" hidden>
+                <pre id="panic-code" class="panic-code"></pre>
+                <div class="panic-terminal">
+                  <div class="pt-head">PROBLEMS &nbsp; OUTPUT &nbsp; <b>TERMINAL</b> &nbsp; PORTS</div>
+                  <pre id="panic-term" class="pt-body"></pre>
+                </div>
+              </div>
             </div>
           </div>
         </main>
@@ -225,20 +236,6 @@
         </div>
         <button id="btn-logout" class="btn-ghost">Sign out</button>
         <button id="btn-logout-all" class="btn-ghost">Sign out everywhere</button>
-      </div>
-    </div>
-
-    <!-- ===================== FOCUS / BOSS-KEY OVERLAY ===================== -->
-    <div id="panic" class="panic" hidden>
-      <div class="panic-tabs">
-        <span class="panic-tab active"><span class="ico" data-icon="terminal"></span> build.log</span>
-        <span class="panic-tab"><span class="ico" data-icon="file"></span> deploy.ts</span>
-        <span class="panic-tab"><span class="ico" data-icon="file"></span> Dockerfile</span>
-      </div>
-      <pre id="panic-code" class="panic-code"></pre>
-      <div class="panic-terminal">
-        <div class="pt-head">PROBLEMS &nbsp; OUTPUT &nbsp; <b>TERMINAL</b> &nbsp; PORTS</div>
-        <pre id="panic-term" class="pt-body"></pre>
       </div>
     </div>
 

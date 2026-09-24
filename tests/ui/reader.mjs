@@ -135,9 +135,9 @@ try {
 
   // Boss key over the editor.
   await page.keyboard.press("\\");
-  await page.waitForSelector("#panic:not([hidden])");
+  await page.waitForSelector("#panic-editor:not([hidden])");
   await page.keyboard.type("unlock");
-  await page.waitForSelector("#panic", { state: "hidden" });
+  await page.waitForSelector("#panic-editor", { state: "hidden" });
   check("boss key covers and releases the editor", true);
   await page.screenshot({ path: `${SHOTS}/monaco-4-after-boss.png` });
 } catch (e) {

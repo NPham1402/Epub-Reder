@@ -327,12 +327,11 @@ kbd {
 .stepper button { background: var(--input-bg); border: 1px solid var(--widget-border); color: var(--fg); border-radius: 3px; padding: 2px 8px; cursor: pointer; }
 .stepper button:hover { background: var(--btn-hover-bg); }
 
-/* ---------------- Panic overlay ---------------- */
-.panic { position: fixed; inset: 0; z-index: 100; background: var(--editor-bg); display: flex; flex-direction: column; }
-.panic-tabs { height: 35px; background: var(--tabs-bg); display: flex; }
-.panic-tab { padding: 0 12px; height: 35px; display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--tab-fg); background: var(--tab-inactive-bg); border-right: 1px solid var(--tabs-bg); }
-.panic-tab .codicon { font-size: 16px; }
-.panic-tab.active { background: var(--tab-active-bg); color: var(--fg-strong); }
+/* ---------------- Panic (boss-key) cover ----------------
+   Sits inside .editor, exactly where .monaco-host does, so the title bar,
+   activity bar, sidebar and status bar chrome never move or disappear —
+   only the pane content swaps, like opening a different file. */
+.panic-editor { position: absolute; inset: 0; background: var(--editor-bg); display: flex; flex-direction: column; }
 .panic-code { flex: 1; margin: 0; padding: 8px 16px; overflow: auto; font-family: var(--font-mono); font-size: 13px; line-height: 1.5; color: var(--editor-fg); }
 .panic-terminal { height: 200px; border-top: 1px solid var(--panel-border); background: var(--terminal-bg); }
 .pt-head { padding: 6px 14px; font-size: 11px; letter-spacing: 0.05em; color: var(--fg-dim); }

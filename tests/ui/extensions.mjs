@@ -105,10 +105,10 @@ try {
   await page.click("text=Show a sample reminder");
   check("a sample reminder appears as a notification", (await page.locator(".toast").count()) === 1);
   await page.keyboard.press("\\");
-  await page.waitForSelector("#panic:not([hidden])");
+  await page.waitForSelector("#panic-editor:not([hidden])");
   check("the boss key hides notifications", !(await vis("#toasts")));
   await page.keyboard.type("unlock");
-  await page.waitForSelector("#panic", { state: "hidden" });
+  await page.waitForSelector("#panic-editor", { state: "hidden" });
   check("and they come back after unlocking", await vis("#toasts"));
   await page.click(".toast .toast-btn");
   await page.click(".xp-btn:has-text('Disable')");
@@ -129,12 +129,12 @@ try {
   check("the reading editor follows the theme", editorBg === "rgb(255, 255, 255)", editorBg);
   await page.screenshot({ path: `${SHOTS}/A-5-light-reading.png` });
   await page.keyboard.press("\\");
-  await page.waitForSelector("#panic:not([hidden])");
-  const panicBg = await cssBg("#panic");
+  await page.waitForSelector("#panic-editor:not([hidden])");
+  const panicBg = await cssBg("#panic-editor");
   check("the cover screen follows the theme too", panicBg === "rgb(255, 255, 255)", panicBg);
   await page.screenshot({ path: `${SHOTS}/A-6-light-panic.png` });
   await page.keyboard.type("unlock");
-  await page.waitForSelector("#panic", { state: "hidden" });
+  await page.waitForSelector("#panic-editor", { state: "hidden" });
   for (const [name, bg] of [["Monokai", "rgb(39, 40, 34)"], ["AMOLED", "rgb(0, 0, 0)"]]) {
     await showExtView();
     await page.locator("#ext-list .ext-item", { hasText: "Color Themes" }).click();

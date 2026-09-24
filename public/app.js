@@ -1247,22 +1247,147 @@ function toggleSidebar() {
   if (!nowHidden) revealActiveInTree(); // catch up if a chapter was opened while collapsed
 }
 
+// Fake Explorer tree / tabs / breadcrumb shown while the cover is up — kept
+// as static markup using the real .tree-row/.tab/.crumb classes (not a
+// separate look-alike), so title bar, activity bar and status bar chrome
+// never move: only this content swaps, like opening a different file.
+const PANIC_TREE_HTML = `
+  <div class="tree-book">
+    <div class="tree-row">
+      <span class="tree-caret codicon codicon-chevron-down"></span>
+      <span class="tree-ico tree-folder codicon codicon-folder-open"></span>
+      <span class="tree-label">eBOSS.Standard</span>
+    </div>
+    <div class="tree-children">
+      <div class="tree-row tree-file active">
+        <span class="tree-ico codicon codicon-file ext-default"></span>
+        <span class="tree-label">Program.cs</span>
+      </div>
+      <div class="tree-row tree-file">
+        <span class="tree-ico codicon codicon-file ext-default"></span>
+        <span class="tree-label">FarmService.cs</span>
+      </div>
+      <div class="tree-row tree-file">
+        <span class="tree-ico codicon codicon-file ext-default"></span>
+        <span class="tree-label">appsettings.json</span>
+      </div>
+    </div>
+  </div>`;
+const PANIC_TABS_HTML = ["Program.cs", "FarmService.cs", "appsettings.json"]
+  .map(
+    (name, i) => `
+  <div class="tab${i === 0 ? " active" : ""}">
+    <span class="tab-ico codicon codicon-file ext-default"></span>
+    <span class="tab-name">${name}</span>
+    <span class="tab-close codicon codicon-close"></span>
+  </div>`
+  )
+  .join("");
+const PANIC_BREADCRUMB_HTML = `
+  <span class="crumb"><span class="codicon codicon-folder"></span><span>src</span></span>
+  <span class="sep codicon codicon-chevron-right"></span>
+  <span class="crumb"><span class="codicon codicon-folder"></span><span>eBOSS.Standard</span></span>
+  <span class="sep codicon codicon-chevron-right"></span>
+  <span class="crumb"><span class="codicon codicon-file ext-default"></span><span>Program.cs</span></span>`;
+
 let panicVisible = false;
 let panicBuffer = "";
+let panicSaved = null;
+let panicTypeToken = 0;
+
 function setPanic(on) {
   panicVisible = on;
   panicBuffer = "";
-  $("#panic").hidden = !on;
-  if (on) renderPanic();
+  panicTypeToken++; // invalidate any in-flight terminal typing
+  if (on) {
+    panicSaved = {
+      title: document.title,
+      welcomeHidden: $("#welcome").hidden,
+      monacoHidden: $("#monaco-host").hidden,
+      extHidden: $("#ext-page").hidden,
+    };
+    renderPanic();
+    $("#welcome").hidden = true;
+    $("#monaco-host").hidden = true;
+    $("#ext-page").hidden = true;
+    $("#panic-editor").hidden = false;
+  } else {
+    $("#panic-editor").hidden = true;
+    if (panicSaved) {
+      document.title = panicSaved.title;
+      $("#welcome").hidden = panicSaved.welcomeHidden;
+      $("#monaco-host").hidden = panicSaved.monacoHidden;
+      $("#ext-page").hidden = panicSaved.extHidden;
+      panicSaved = null;
+    }
+    // Real render functions, not a saved HTML snapshot: innerHTML round-trips
+    // lose the click handlers on tabs/tree rows, a snapshot wouldn't.
+    renderTree();
+    renderTabs();
+    renderBreadcrumbs();
+    if (state.current) updateStatusFile();
+    else $("#st-lang").textContent = "Markdown";
+    revealActiveInTree();
+  }
   extEvent("panic");
 }
 function anyModalOpen() { return ["upload", "settings", "login"].some((id) => !$("#" + id).hidden); }
 function renderPanic() {
+  $("#tree").innerHTML = PANIC_TREE_HTML;
+  $("#tabs").innerHTML = PANIC_TABS_HTML;
+  $("#breadcrumbs").innerHTML = PANIC_BREADCRUMB_HTML;
+  $("#sb-footer").textContent = "1 module";
+  $("#st-lang").textContent = "C#";
+  document.title = "Program.cs — eBOSS.Standard";
   $("#panic-code").innerHTML = PANIC_CODE;
-  $("#panic-term").innerHTML = PANIC_TERM + '<span class="term-cursor">&nbsp;</span>';
+  typeTerminal();
+}
+// Reveals PANIC_TERM_LINES progressively: "$ "-prefixed lines are keyed in
+// character by character (looks like someone typing a command right now),
+// everything else appears line by line (looks like streamed build output).
+// Guarded by panicTypeToken so closing/reopening the cover cancels any
+// in-flight run instead of stacking multiple typing loops.
+function typeTerminal() {
+  const term = $("#panic-term");
+  term.textContent = "";
+  const myToken = panicTypeToken;
+  let i = 0;
+  const nextLine = () => {
+    if (myToken !== panicTypeToken) return;
+    if (i >= PANIC_TERM_LINES.length) {
+      term.appendChild(el("span", "term-cursor", " "));
+      return;
+    }
+    const line = PANIC_TERM_LINES[i++];
+    if (term.textContent) term.appendChild(document.createTextNode("\n"));
+    if (line.cmd) {
+      const span = el("span", "pl-cmt", "$ ");
+      term.appendChild(span);
+      typeChars(span, line.t, nextLine);
+    } else {
+      term.appendChild(document.createTextNode(line.t));
+      setTimeout(nextLine, line.t ? 35 + Math.random() * 65 : 15);
+    }
+  };
+  const typeChars = (span, text, done) => {
+    let c = 0;
+    const tick = () => {
+      if (myToken !== panicTypeToken) return;
+      if (c >= text.length) { setTimeout(done, 200); return; }
+      span.textContent += text[c++];
+      setTimeout(tick, 16 + Math.random() * 34);
+    };
+    tick();
+  };
+  nextLine();
 }
 window.addEventListener("blur", () => {
   if (state.settings.blurHide && $("#app").hidden === false && !anyModalOpen()) setPanic(true);
+});
+document.addEventListener("visibilitychange", () => {
+  // Covers switches blur doesn't reliably fire for (minimize, virtual-desktop
+  // switch, screen lock) — same instant, no-fade cover, just a wider net.
+  if (document.visibilityState === "hidden" && state.settings.blurHide && $("#app").hidden === false && !anyModalOpen()) setPanic(true);
 });
 
 /* ============================ Keyboard ==================================== */
@@ -1341,57 +1466,62 @@ document.addEventListener("keyup", (e) => {
 });
 window.addEventListener("blur", stopMoveKeys);
 
-/* ============================ Panic content =============================== */
+/* ============================ Panic content =================================
+   .NET/C#-flavored (VB.NET-adjacent), not Cloudflare/TS: it should look like
+   the kind of thing that would plausibly already be open, so the cover
+   doesn't read as "a completely different kind of project than usual". */
 const PANIC_CODE = [
-  '<span class="pl-cmt">// src/edge/session-gateway.ts</span>',
-  '<span class="pl-key">import</span> { Router } <span class="pl-key">from</span> <span class="pl-str">"itty-router"</span>;',
-  '<span class="pl-key">import</span> { verifyJWT, signSession } <span class="pl-key">from</span> <span class="pl-str">"../crypto/jwt"</span>;',
+  '<span class="pl-cmt">// Program.cs</span>',
+  '<span class="pl-key">using</span> System;',
+  '<span class="pl-key">using</span> Microsoft.Extensions.Hosting;',
+  '<span class="pl-key">using</span> Microsoft.Extensions.DependencyInjection;',
+  '<span class="pl-key">using</span> eBOSS.Standard.Services;',
   "",
-  '<span class="pl-key">export interface</span> Env {',
-  "  SESSIONS: KVNamespace;",
-  "  DB: D1Database;",
-  '  JWT_SECRET: <span class="pl-key">string</span>;',
+  '<span class="pl-key">namespace</span> eBOSS.Standard',
+  "{",
+  '    <span class="pl-key">public static class</span> <span class="pl-fn">Program</span>',
+  "    {",
+  '        <span class="pl-key">public static void</span> <span class="pl-fn">Main</span>(<span class="pl-key">string</span>[] args)',
+  "        {",
+  '            <span class="pl-key">var</span> host = Host.<span class="pl-fn">CreateDefaultBuilder</span>(args)',
+  '                .<span class="pl-fn">ConfigureServices</span>((ctx, services) =>',
+  "                {",
+  '                    services.<span class="pl-fn">AddSingleton</span>&lt;IFarmService, FarmService&gt;();',
+  '                    services.<span class="pl-fn">AddHostedService</span>&lt;SyncWorker&gt;();',
+  "                })",
+  '                .<span class="pl-fn">Build</span>();',
+  "",
+  "            host.Run();",
+  "        }",
+  "    }",
   "}",
-  "",
-  '<span class="pl-key">const</span> router = <span class="pl-fn">Router</span>();',
-  "",
-  'router.<span class="pl-fn">post</span>(<span class="pl-str">"/v1/auth/refresh"</span>, <span class="pl-key">async</span> (req, env: Env) => {',
-  '  <span class="pl-key">const</span> token = req.headers.<span class="pl-fn">get</span>(<span class="pl-str">"authorization"</span>)?.<span class="pl-fn">slice</span>(<span class="pl-num">7</span>);',
-  '  <span class="pl-key">if</span> (!token) <span class="pl-key">return</span> <span class="pl-fn">json</span>({ error: <span class="pl-str">"missing token"</span> }, <span class="pl-num">401</span>);',
-  "",
-  '  <span class="pl-key">const</span> claims = <span class="pl-key">await</span> <span class="pl-fn">verifyJWT</span>(token, env.JWT_SECRET);',
-  '  <span class="pl-key">if</span> (!claims) <span class="pl-key">return</span> <span class="pl-fn">json</span>({ error: <span class="pl-str">"invalid token"</span> }, <span class="pl-num">401</span>);',
-  "",
-  '  <span class="pl-key">const</span> session = <span class="pl-key">await</span> <span class="pl-fn">signSession</span>(claims.sub, env.JWT_SECRET, <span class="pl-num">3600</span>);',
-  '  <span class="pl-key">await</span> env.SESSIONS.<span class="pl-fn">put</span>(claims.sub, session, { expirationTtl: <span class="pl-num">3600</span> });',
-  '  <span class="pl-key">return</span> <span class="pl-fn">json</span>({ session, expiresIn: <span class="pl-num">3600</span> });',
-  "});",
-  "",
-  'router.<span class="pl-fn">get</span>(<span class="pl-str">"/v1/health"</span>, () => <span class="pl-fn">json</span>({ ok: <span class="pl-key">true</span> }));',
-  "",
-  '<span class="pl-key">export default</span> { fetch: router.handle };',
 ].join("\n");
 
-const PANIC_TERM = [
-  '<span class="pl-cmt">$ npm run deploy</span>',
-  "",
-  "> edge-session-gateway@1.4.2 deploy",
-  "> wrangler deploy",
-  "",
-  " ⛅️ wrangler 4.4.0",
-  "Total Upload: 48.21 KiB / gzip: 12.07 KiB",
-  "Uploaded edge-session-gateway (3.11 sec)",
-  "Deployed edge-session-gateway triggers (0.42 sec)",
-  "  https://edge-session-gateway.workers.dev",
-  "Current Version ID: 7a1c9f2e-3b44-48d1-9c02-5e8b1a0f6d3c",
-  "",
-  '<span class="pl-cmt">$ npm test -- --watch</span>',
-  " PASS  test/session.spec.ts (2.4s)",
-  " PASS  test/jwt.spec.ts (1.1s)",
-  "Tests:       17 passed, 17 total",
-  "",
-  '<span class="pl-cmt">$ </span>',
-].join("\n");
+// Lines typed with `cmd: true` are keyed in character-by-character, like
+// someone actually typing a command; the rest appears line-by-line, like
+// streamed build/test output — so a glance mid-animation reads as "a build
+// is running", not as a static screenshot.
+const PANIC_TERM_LINES = [
+  { t: "dotnet build", cmd: true },
+  { t: "" },
+  { t: "  Determining projects to restore..." },
+  { t: "  Restored eBOSS.Standard.csproj (0.8s)" },
+  { t: "  eBOSS.Standard -> bin\\Debug\\net8.0\\eBOSS.Standard.dll" },
+  { t: "" },
+  { t: "Build succeeded." },
+  { t: "    0 Warning(s)" },
+  { t: "    0 Error(s)" },
+  { t: "" },
+  { t: "Time Elapsed 00:00:04.71" },
+  { t: "" },
+  { t: "dotnet run --project eBOSS.Standard", cmd: true },
+  { t: "info: eBOSS.Standard.SyncWorker[0]" },
+  { t: "      Sync worker started." },
+  { t: "info: eBOSS.Standard.FarmService[0]" },
+  { t: "      Loaded 42 record(s) from NLV_Farm." },
+  { t: "info: Microsoft.Hosting.Lifetime[0]" },
+  { t: "      Application started. Press Ctrl+C to shut down." },
+];
 
 /* ============================ Go ========================================== */
 const VSCODE_LOGO =
