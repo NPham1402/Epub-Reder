@@ -1296,6 +1296,9 @@ let panicSaved = null;
 let panicTypeToken = 0;
 
 function setPanic(on) {
+  // blur and visibilitychange often both fire for one switch-away; a second
+  // "on" would save the cover itself as the state to restore.
+  if (on === panicVisible) return;
   panicVisible = on;
   panicBuffer = "";
   panicTypeToken++; // invalidate any in-flight terminal typing

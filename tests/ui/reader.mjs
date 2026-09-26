@@ -139,6 +139,16 @@ try {
   await page.keyboard.type("unlock");
   await page.waitForSelector("#panic-editor", { state: "hidden" });
   check("boss key covers and releases the editor", true);
+
+  // blur + visibilitychange both fire on a real switch-away: covering twice
+  // must not make the cover the state that gets restored.
+  const titleBefore = await page.title();
+  await page.evaluate(() => { setPanic(true); setPanic(true); });
+  await page.waitForSelector("#panic-editor:not([hidden])");
+  await page.keyboard.type("unlock");
+  await page.waitForSelector("#panic-editor", { state: "hidden" });
+  check("covering twice still restores the editor", await page.locator("#monaco-host").isVisible());
+  check("and the real tab title", (await page.title()) === titleBefore, `${titleBefore} -> ${await page.title()}`);
   await page.screenshot({ path: `${SHOTS}/monaco-4-after-boss.png` });
 } catch (e) {
   failed++;
