@@ -18,6 +18,7 @@ node --disable-warning=ExperimentalWarning tests/ui/scroll-smooth.mjs # reading-
 node --disable-warning=ExperimentalWarning tests/ui/wheel-smooth.mjs  # a mouse-wheel notch animates instead of jumping
 node --disable-warning=ExperimentalWarning tests/ui/pwa-install.mjs   # manifest + icons for "Install app", one shared title bar (window-controls-overlay)
 node --disable-warning=ExperimentalWarning tests/ui/offline.mjs       # true network-cut offline reading, download-for-offline, logout clears it
+node --disable-warning=ExperimentalWarning tests/ui/cover-race.mjs    # boss-key cover raised mid-load: nothing real leaks, unlock restores the editor
 node --disable-warning=ExperimentalWarning tests/ui/layout.mjs capture   # once, on a known-good build
 node --disable-warning=ExperimentalWarning tests/ui/layout.mjs compare   # after a UI change: the shell must not move
 ```

@@ -516,6 +516,7 @@ function prefetchAround(book, idx) {
 
 /* ============================ Tree ========================================= */
 function renderTree() {
+  if (panicVisible) return; // the cover owns the sidebar; setPanic(false) redraws it
   const tree = $("#tree");
   tree.innerHTML = "";
   for (const book of state.books) {
@@ -669,6 +670,7 @@ function closeTab(key) {
 }
 
 function renderTabs() {
+  if (panicVisible) return;
   const tabs = $("#tabs");
   tabs.innerHTML = "";
   for (const t of state.tabs) {
@@ -691,6 +693,7 @@ function renderTabs() {
 }
 
 function renderBreadcrumbs() {
+  if (panicVisible) return;
   const bc = $("#breadcrumbs");
   bc.innerHTML = "";
   if (isExtKey(state.activeKey) && typeof extCrumb === "function") { extCrumb(bc, state.activeKey.slice(4)); return; }
@@ -728,6 +731,7 @@ function renderBreadcrumbs() {
 }
 
 function updateStatusFile() {
+  if (panicVisible) return;
   $("#st-lang").textContent = state.current ? langOf(state.current.fileName) : "Markdown";
   if (state.current) {
     const ch = chapterOf(state.current.bookId, state.current.idx);
@@ -1303,12 +1307,7 @@ function setPanic(on) {
   panicBuffer = "";
   panicTypeToken++; // invalidate any in-flight terminal typing
   if (on) {
-    panicSaved = {
-      title: document.title,
-      welcomeHidden: $("#welcome").hidden,
-      monacoHidden: $("#monaco-host").hidden,
-      extHidden: $("#ext-page").hidden,
-    };
+    panicSaved = { title: document.title };
     renderPanic();
     $("#welcome").hidden = true;
     $("#monaco-host").hidden = true;
@@ -1316,20 +1315,22 @@ function setPanic(on) {
     $("#panic-editor").hidden = false;
   } else {
     $("#panic-editor").hidden = true;
-    if (panicSaved) {
-      document.title = panicSaved.title;
-      $("#welcome").hidden = panicSaved.welcomeHidden;
-      $("#monaco-host").hidden = panicSaved.monacoHidden;
-      $("#ext-page").hidden = panicSaved.extHidden;
-      panicSaved = null;
-    }
+    if (panicSaved) { document.title = panicSaved.title; panicSaved = null; }
+    // Which pane belongs on screen is worked out from the current state, not
+    // from a snapshot: a chapter can finish loading, or the tab change, while
+    // the cover is up, and a stale snapshot would bring back an empty editor.
+    const ext = isExtKey(state.activeKey);
+    $("#ext-page").hidden = !ext;
+    $("#monaco-host").hidden = ext || !state.current;
+    $("#welcome").hidden = ext || !!state.current;
+    if (reader.ed) reader.ed.layout();
     // Real render functions, not a saved HTML snapshot: innerHTML round-trips
     // lose the click handlers on tabs/tree rows, a snapshot wouldn't.
     renderTree();
     renderTabs();
     renderBreadcrumbs();
     if (state.current) updateStatusFile();
-    else $("#st-lang").textContent = "Markdown";
+    else { $("#st-lang").textContent = "Markdown"; if (!ext) document.title = "workspace — devdocs"; }
     revealActiveInTree();
   }
   extEvent("panic");
