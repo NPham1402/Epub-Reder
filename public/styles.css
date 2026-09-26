@@ -132,6 +132,26 @@ html, body {
 .tb-win { width: 28px; height: 22px; color: var(--fg); }
 .tb-win:hover { background: var(--hover); }
 
+/* Installed app with "window controls overlay": the OS draws its real
+   min/max/close over the right end of this bar instead of adding a second
+   title bar above it. So this bar takes the OS bar's height, keeps clear of
+   the real buttons, drags the window, and drops its own look-alike buttons.
+   Browsers/installs without the mode never match, so nothing else changes. */
+@media (display-mode: window-controls-overlay) {
+  .titlebar {
+    height: env(titlebar-area-height, 30px);
+    padding-left: env(titlebar-area-x, 8px);
+    padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw) + 8px);
+    -webkit-app-region: drag;
+    app-region: drag;
+  }
+  .tb-menu, .tb-right .tb-icon, .tb-logo {
+    -webkit-app-region: no-drag;
+    app-region: no-drag;
+  }
+  .titlebar .tb-right .tb-win { display: none; }
+}
+
 .body { flex: 1; display: flex; min-height: 0; }
 
 .activitybar {

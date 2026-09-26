@@ -214,7 +214,7 @@ npm run dev
 
 Edge/Chrome offer **Install app** (icon in the address bar) — this runs the page as
 its own window, with its own Start Menu/taskbar entry and icon, no address bar.
-The icon is the same VS Code logo the page already uses.
+The icon is the same VS Code logo the page already uses. The app's own VS Code-style bar shares the top row with Windows' real min/max/close (uninstall and reinstall once to pick this up).
 
 Once installed (or even just visited once), a service worker (`public/sw.js`) keeps
 the app itself and any book/chapter you've opened available with no network at all.

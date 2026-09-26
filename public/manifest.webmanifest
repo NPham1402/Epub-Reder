@@ -6,6 +6,7 @@
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
+  "display_override": ["window-controls-overlay"],
   "orientation": "any",
   "theme_color": "#3c3c3c",
   "background_color": "#1e1e1e",

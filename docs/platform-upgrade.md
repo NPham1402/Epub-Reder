@@ -443,4 +443,10 @@ Theo yêu cầu: "làm cho website có thể download as app trên window đi v�
 
 **Chưa kiểm chứng:**
 - Chưa thử trên máy Windows thật (chỉ Chromium headless). Bạn nên tự mở lại trang, bấm icon "Install app" ở thanh địa chỉ Edge/Chrome, thử tắt Wi-Fi rồi mở app đã cài để xác nhận cảm nhận thực tế.
-- `window-controls-overlay` (thanh tiêu đề giống VS Code thật hơn) cố tình chưa làm, xem 15.1.
+- `window-controls-overlay` đã làm sau (2026-09-26, xem 15.3) nhưng chỉ mô phỏng được bằng trình duyệt tự động; chế độ thật chỉ có trên app đã cài, cần gỡ và cài lại.
+
+### 15.3 Một thanh tiêu đề thay vì hai (window-controls-overlay, 2026-09-26)
+
+App đã cài trước đó có hai thanh chồng nhau: thanh Windows thật (tiêu đề + 3 nút) và thanh VS Code giả bên dưới (cũng có 3 nút giả). Sửa: manifest thêm `display_override: ["window-controls-overlay"]` (giữ `display: standalone` làm dự phòng); CSS trong `@media (display-mode: window-controls-overlay)` cho thanh giả lấy chiều cao/vùng của thanh OS (`env(titlebar-area-*)`), chừa chỗ cho 3 nút thật bên phải, kéo được cửa sổ (`app-region: drag`, menu/nút là `no-drag`) và ẩn 3 nút giả. Ngoài chế độ này (tab trình duyệt, app cài kiểu cũ) không có gì đổi — layout.mjs vẫn khớp từng pixel.
+
+Kiểm chứng: `pwa-install.mjs` (giờ 20 test) kiểm manifest, kiểm bên ngoài chế độ overlay thanh vẫn 30px/nút giả còn nguyên, rồi giả lập chế độ (thay env() bằng số cụ thể) để kiểm chiều cao, ẩn nút giả, nút không chèn lên vùng nút thật, không tràn. Test bắt được một lỗi thật: rule `.tb-win.codicon` có độ ưu tiên cao hơn `display:none` nên nút giả vẫn hiện — đã sửa selector. **Chưa kiểm chứng trên Edge đã cài thật**; muốn nhận chế độ mới phải gỡ app rồi cài lại.
