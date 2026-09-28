@@ -9,12 +9,17 @@ const CODI = {
   error: "error", warning: "warning", sync: "sync", bell: "bell", terminal: "terminal",
   file: "file-code", folder: "folder", "folder-open": "folder-opened",
   "chevron-right": "chevron-right", "chevron-down": "chevron-down", trash: "trash",
+  book: "book", menu: "menu", "symbol-color": "symbol-color", chevron: "chevron-right",
+  "arrow-left": "arrow-left", "arrow-right": "arrow-right", "layout-sidebar-left": "layout-sidebar-left",
+  bookmark: "bookmark", dash: "dash",
+  "comment-discussion": "comment-discussion", "clear-all": "clear-all", "vm-connect": "vm-connect",
+  sparkle: "sparkle", chat: "comment-discussion",
 };
 const codiName = (name) => CODI[name] || name;
 const codiCls = (name, extra) => "codicon codicon-" + codiName(name) + (extra ? " " + extra : "");
 function injectIcons(root = document) {
   root.querySelectorAll("[data-icon]").forEach((e) => {
-    const c = CODI[e.dataset.icon];
+    const c = CODI[e.dataset.icon] || e.dataset.icon;
     if (c) e.classList.add("codicon", "codicon-" + c);
   });
 }
@@ -152,9 +157,16 @@ function applyReaderOptions() {
 // One place that knows how to read/set the reader's scroll position, so the
 // progress, keyboard and session code doesn't care what draws the text.
 const view = {
-  get top() { return reader.ed ? reader.ed.getScrollTop() : 0; },
-  set top(v) { if (reader.ed) reader.ed.setScrollTop(Math.max(0, v)); },
+  get top() {
+    if (typeof isDocMode === "function" && isDocMode() && window.docView) return window.docView.top;
+    return reader.ed ? reader.ed.getScrollTop() : 0;
+  },
+  set top(v) {
+    if (typeof isDocMode === "function" && isDocMode() && window.docView) window.docView.top = v;
+    else if (reader.ed) reader.ed.setScrollTop(Math.max(0, v));
+  },
   get max() {
+    if (typeof isDocMode === "function" && isDocMode() && window.docView) return window.docView.max;
     const e = reader.ed;
     return e ? Math.max(0, e.getScrollHeight() - e.getLayoutInfo().height) : 0;
   },
@@ -318,6 +330,7 @@ function loadSettings() {
   return {
     blurHide: !!s.blurHide,
     camo: !!s.camo,
+    camoStyle: s.camoStyle || "docstring",
     serif: !!s.serif,
     readFocus: s.readFocus !== false,
     fontSize: s.fontSize || 15,
@@ -325,6 +338,10 @@ function loadSettings() {
     panicCode: (s.panicCode || DEFAULT_PANIC_CODE).toLowerCase(),
     extensions: s.extensions && typeof s.extensions === "object" ? s.extensions : {},
     theme: s.theme || "dark",
+    viewMode: s.viewMode || "code",
+    fontFamily: s.fontFamily || "mono",
+    textAlign: s.textAlign || "left",
+    panicTemplate: s.panicTemplate || "csharp",
     readSpeed: s.readSpeed || 900,
     remindMin: s.remindMin == null ? 60 : s.remindMin,
     librarySort: s.librarySort || "recent",
@@ -352,7 +369,11 @@ async function api(path, opts = {}) {
 // sw.js), so a dropped connection doesn't lose the page or previously-read
 // content. Signing out clears the cache too — offline access must not outlive
 // the session.
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").then((reg) => {
+    reg.update();
+  }).catch(() => {});
+}
 // Must match sw.js's DATA_CACHE — extensions.js writes into it directly for
 // the "download for offline" action (see the Library extension).
 const OFFLINE_DATA_CACHE = "epub-reader-data-v1";
@@ -742,6 +763,7 @@ function updateStatusFile() {
 function showWelcome() {
   state.current = null;
   $("#monaco-host").hidden = true;
+  const dh = $("#doc-host"); if (dh) dh.hidden = true;
   $("#ext-page").hidden = true;
   $("#welcome").hidden = false;
   $("#breadcrumbs").innerHTML = "";
@@ -753,6 +775,7 @@ function showWelcome() {
 // blank line after it, plus the disguise comments and chapter "imports".
 function buildDoc(ch) {
   const camo = state.settings.camo;
+  const camoDoc = camo && state.settings.camoStyle !== "comment";
   const lines = [];
   const meta = [];
   const paraLine = [];
@@ -768,6 +791,12 @@ function buildDoc(ch) {
 
   // File path header comment (disguise, no title duplication).
   push(`// src/${state.current.code_name}/${fileLabel(ch)}`, "c");
+  if (camoDoc) {
+    push(`import { ExecutionContext, NarrativeEngine } from "@core/runtime";`, "c");
+    blank();
+    push(`export class ModuleContextService implements NarrativeEngine {`, "c");
+    push(`  private readonly version: string = "2.4.0";`, "c");
+  }
   blank();
 
   const blocks = ch._blocks || ch.blocks || [];
@@ -777,6 +806,14 @@ function buildDoc(ch) {
   blocks.forEach((b, bi) => {
     if (b.type === "h1" || b.type === "h2" || b.type === "h3") {
       heading(b.text, b.type === "h1" ? 1 : b.type === "h2" ? 2 : 3);
+    } else if (camoDoc) {
+      push(`  /**`, "c");
+      paraLine[bi] = push(`   * @summary ${oneLine(b.text)}`, "c", { p: bi });
+      push(`   */`, "c");
+      push(`  public async handleNode_${bi + 1}(ctx: ExecutionContext): Promise<void> {`, "c");
+      push(`    console.debug("[Trace]", "Executing node step ${bi + 1}");`, "c");
+      push(`  }`, "c");
+      blank();
     } else if (camo) {
       push("// " + oneLine(b.text), "c");
       blank();
@@ -785,6 +822,11 @@ function buildDoc(ch) {
       blank();
     }
   });
+
+  if (camoDoc) {
+    push(`}`, "c");
+    blank();
+  }
 
   // Prev / next chapter, disguised as import comments.
   const chapters = state.current.book._chapters;
@@ -800,8 +842,22 @@ function buildDoc(ch) {
 async function renderContent(ch) {
   const cur = state.current;
   const host = $("#monaco-host");
+  const docHost = $("#doc-host");
   $("#ext-page").hidden = true;
   $("#welcome").hidden = true;
+
+  const isDoc = typeof isDocMode === "function" && isDocMode();
+  if (isDoc && window.docView) {
+    host.hidden = true;
+    if (docHost) docHost.hidden = false;
+    state.hl = loadHighlights(cur.bookId, ch.idx);
+    window.docView.render(ch);
+    if (typeof updateViewModeDOM === "function") updateViewModeDOM();
+    if (window.aiChat) window.aiChat.updateContextPill();
+    return;
+  }
+
+  if (docHost) docHost.hidden = true;
   host.hidden = false;
   let ed;
   try {
@@ -834,6 +890,9 @@ async function renderContent(ch) {
   );
   paintHighlights();
   paintFocus();
+  if (typeof updateViewModeDOM === "function") updateViewModeDOM();
+  if (window.aiChat) window.aiChat.updateContextPill();
+  if (window.thiefReader) window.thiefReader.render();
 }
 
 /* ============================ Scroll / progress =========================== */
@@ -1169,6 +1228,10 @@ function openSettings() {
   $("#opt-serif").checked = state.settings.serif;
   $("#opt-focus").checked = state.settings.readFocus;
   $("#opt-panic-code").value = state.settings.panicCode;
+  const vmode = $("#opt-viewmode"); if (vmode) vmode.value = state.settings.viewMode || "code";
+  const ff = $("#opt-font-family"); if (ff) ff.value = state.settings.fontFamily || "mono";
+  const ta = $("#opt-text-align"); if (ta) ta.value = state.settings.textAlign || "left";
+  const pt = $("#opt-panic-template"); if (pt) pt.value = state.settings.panicTemplate || "csharp";
   $("#font-val").textContent = state.settings.fontSize;
   $("#width-val").textContent = state.settings.readWidth;
   $("#settings").hidden = false;
@@ -1188,6 +1251,32 @@ $("#opt-focus").addEventListener("change", (e) => {
   state.settings.readFocus = e.target.checked;
   saveSettings();
   paintFocus();
+});
+const optViewMode = $("#opt-viewmode");
+if (optViewMode) optViewMode.addEventListener("change", (e) => {
+  state.settings.viewMode = e.target.value;
+  saveSettings();
+  if (typeof updateViewModeDOM === "function") updateViewModeDOM();
+  rerender();
+});
+const optFontFam = $("#opt-font-family");
+if (optFontFam) optFontFam.addEventListener("change", (e) => {
+  state.settings.fontFamily = e.target.value;
+  saveSettings();
+  applySettingsToDom();
+  applyReaderOptions();
+  rerender();
+});
+const optTextAlign = $("#opt-text-align");
+if (optTextAlign) optTextAlign.addEventListener("change", (e) => {
+  state.settings.textAlign = e.target.value;
+  saveSettings();
+  applySettingsToDom();
+});
+const optPanicTpl = $("#opt-panic-template");
+if (optPanicTpl) optPanicTpl.addEventListener("change", (e) => {
+  state.settings.panicTemplate = e.target.value;
+  saveSettings();
 });
 $("#font-inc").addEventListener("click", () => changeFont(1));
 $("#font-dec").addEventListener("click", () => changeFont(-1));
@@ -1209,6 +1298,16 @@ function applySettingsToDom() {
   const r = document.documentElement.style;
   r.setProperty("--code-size", state.settings.fontSize + "px");
   r.setProperty("--read-width", state.settings.readWidth + "ch");
+  const FONT_MAP = {
+    mono: '"Cascadia Code", "Consolas", monospace',
+    jetbrains: '"JetBrains Mono", "Cascadia Code", monospace',
+    fira: '"Fira Code", "Cascadia Code", monospace',
+    inter: '"Inter", -apple-system, system-ui, sans-serif',
+    literata: '"Literata", Georgia, serif',
+  };
+  const fontFam = FONT_MAP[state.settings.fontFamily] || FONT_MAP.mono;
+  r.setProperty("--doc-font", fontFam);
+  r.setProperty("--doc-align", state.settings.textAlign || "left");
 }
 async function rerender() {
   const ch = state.current && chapterOf(state.current.bookId, state.current.idx);
@@ -1311,6 +1410,7 @@ function setPanic(on) {
     renderPanic();
     $("#welcome").hidden = true;
     $("#monaco-host").hidden = true;
+    const dh = $("#doc-host"); if (dh) dh.hidden = true;
     $("#ext-page").hidden = true;
     $("#panic-editor").hidden = false;
   } else {
@@ -1320,8 +1420,10 @@ function setPanic(on) {
     // from a snapshot: a chapter can finish loading, or the tab change, while
     // the cover is up, and a stale snapshot would bring back an empty editor.
     const ext = isExtKey(state.activeKey);
+    const isDoc = typeof isDocMode === "function" && isDocMode();
     $("#ext-page").hidden = !ext;
-    $("#monaco-host").hidden = ext || !state.current;
+    $("#monaco-host").hidden = ext || !state.current || isDoc;
+    const dh = $("#doc-host"); if (dh) dh.hidden = ext || !state.current || !isDoc;
     $("#welcome").hidden = ext || !!state.current;
     if (reader.ed) reader.ed.layout();
     // Real render functions, not a saved HTML snapshot: innerHTML round-trips
@@ -1335,34 +1437,37 @@ function setPanic(on) {
   }
   extEvent("panic");
 }
-function anyModalOpen() { return ["upload", "settings", "login"].some((id) => !$("#" + id).hidden); }
+function anyModalOpen() { return ["upload", "settings", "login", "quick-pick"].some((id) => { const el = $("#" + id); return el && !el.hidden; }); }
 function renderPanic() {
-  $("#tree").innerHTML = PANIC_TREE_HTML;
-  $("#tabs").innerHTML = PANIC_TABS_HTML;
-  $("#breadcrumbs").innerHTML = PANIC_BREADCRUMB_HTML;
-  $("#sb-footer").textContent = "1 module";
-  $("#st-lang").textContent = "C#";
-  document.title = "Program.cs — eBOSS.Standard";
-  $("#panic-code").innerHTML = PANIC_CODE;
-  typeTerminal();
+  const tplKey = state.settings.panicTemplate || "csharp";
+  const tpl = (typeof PANIC_TEMPLATES !== "undefined" && PANIC_TEMPLATES[tplKey]) || (typeof PANIC_TEMPLATES !== "undefined" ? PANIC_TEMPLATES.csharp : null);
+  if (!tpl) return;
+  $("#tree").innerHTML = tpl.treeHtml;
+  $("#tabs").innerHTML = tpl.tabsHtml;
+  $("#breadcrumbs").innerHTML = tpl.breadcrumbHtml;
+  $("#sb-footer").textContent = tpl.moduleCount;
+  $("#st-lang").textContent = tpl.lang;
+  document.title = tpl.title;
+  $("#panic-code").innerHTML = tpl.code;
+  typeTerminal(tpl.lines);
 }
-// Reveals PANIC_TERM_LINES progressively: "$ "-prefixed lines are keyed in
+// Reveals lines progressively: "$ "-prefixed lines are keyed in
 // character by character (looks like someone typing a command right now),
 // everything else appears line by line (looks like streamed build output).
 // Guarded by panicTypeToken so closing/reopening the cover cancels any
 // in-flight run instead of stacking multiple typing loops.
-function typeTerminal() {
+function typeTerminal(lines = (typeof PANIC_TEMPLATES !== "undefined" ? PANIC_TEMPLATES.csharp.lines : [])) {
   const term = $("#panic-term");
   term.textContent = "";
   const myToken = panicTypeToken;
   let i = 0;
   const nextLine = () => {
     if (myToken !== panicTypeToken) return;
-    if (i >= PANIC_TERM_LINES.length) {
+    if (i >= lines.length) {
       term.appendChild(el("span", "term-cursor", " "));
       return;
     }
-    const line = PANIC_TERM_LINES[i++];
+    const line = lines[i++];
     if (term.textContent) term.appendChild(document.createTextNode("\n"));
     if (line.cmd) {
       const span = el("span", "pl-cmt", "$ ");
@@ -1443,6 +1548,11 @@ document.addEventListener("keydown", (e) => {
   if (mod && e.altKey && e.key.toLowerCase() === "t") { e.preventDefault(); toggleReveal(); }
   else if (mod && e.altKey && e.key.toLowerCase() === "k") { e.preventDefault(); if (typeof addBookmarkAtReading === "function") addBookmarkAtReading(); }
   else if (mod && e.key.toLowerCase() === "b") { e.preventDefault(); toggleSidebar(); }
+  else if (mod && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "l") { e.preventDefault(); if (window.aiChat) window.aiChat.toggle(); }
+  else if (mod && e.altKey && e.key.toLowerCase() === "i") { e.preventDefault(); if (window.aiChat) window.aiChat.toggle(); }
+  else if (mod && e.altKey && e.key.toLowerCase() === "s") { e.preventDefault(); if (window.thiefReader) window.thiefReader.toggle(); }
+  else if (e.altKey && e.key === "[") { e.preventDefault(); if (window.thiefReader) window.thiefReader.step(-1); }
+  else if (e.altKey && e.key === "]") { e.preventDefault(); if (window.thiefReader) window.thiefReader.step(1); }
   else if (mod && e.shiftKey && e.key.toLowerCase() === "u") { e.preventDefault(); openUpload(); }
   else if (mod && (e.key === "=" || e.key === "+")) { e.preventDefault(); changeFont(1); }
   else if (mod && e.key === "-") { e.preventDefault(); changeFont(-1); }
@@ -1471,65 +1581,353 @@ document.addEventListener("keyup", (e) => {
 window.addEventListener("blur", stopMoveKeys);
 
 /* ============================ Panic content =================================
-   .NET/C#-flavored (VB.NET-adjacent), not Cloudflare/TS: it should look like
-   the kind of thing that would plausibly already be open, so the cover
-   doesn't read as "a completely different kind of project than usual". */
-const PANIC_CODE = [
-  '<span class="pl-cmt">// Program.cs</span>',
-  '<span class="pl-key">using</span> System;',
-  '<span class="pl-key">using</span> Microsoft.Extensions.Hosting;',
-  '<span class="pl-key">using</span> Microsoft.Extensions.DependencyInjection;',
-  '<span class="pl-key">using</span> eBOSS.Standard.Services;',
-  "",
-  '<span class="pl-key">namespace</span> eBOSS.Standard',
-  "{",
-  '    <span class="pl-key">public static class</span> <span class="pl-fn">Program</span>',
-  "    {",
-  '        <span class="pl-key">public static void</span> <span class="pl-fn">Main</span>(<span class="pl-key">string</span>[] args)',
-  "        {",
-  '            <span class="pl-key">var</span> host = Host.<span class="pl-fn">CreateDefaultBuilder</span>(args)',
-  '                .<span class="pl-fn">ConfigureServices</span>((ctx, services) =>',
-  "                {",
-  '                    services.<span class="pl-fn">AddSingleton</span>&lt;IFarmService, FarmService&gt;();',
-  '                    services.<span class="pl-fn">AddHostedService</span>&lt;SyncWorker&gt;();',
-  "                })",
-  '                .<span class="pl-fn">Build</span>();',
-  "",
-  "            host.Run();",
-  "        }",
-  "    }",
-  "}",
-].join("\n");
-
-// Lines typed with `cmd: true` are keyed in character-by-character, like
-// someone actually typing a command; the rest appears line-by-line, like
-// streamed build/test output — so a glance mid-animation reads as "a build
-// is running", not as a static screenshot.
-const PANIC_TERM_LINES = [
-  { t: "dotnet build", cmd: true },
-  { t: "" },
-  { t: "  Determining projects to restore..." },
-  { t: "  Restored eBOSS.Standard.csproj (0.8s)" },
-  { t: "  eBOSS.Standard -> bin\\Debug\\net8.0\\eBOSS.Standard.dll" },
-  { t: "" },
-  { t: "Build succeeded." },
-  { t: "    0 Warning(s)" },
-  { t: "    0 Error(s)" },
-  { t: "" },
-  { t: "Time Elapsed 00:00:04.71" },
-  { t: "" },
-  { t: "dotnet run --project eBOSS.Standard", cmd: true },
-  { t: "info: eBOSS.Standard.SyncWorker[0]" },
-  { t: "      Sync worker started." },
-  { t: "info: eBOSS.Standard.FarmService[0]" },
-  { t: "      Loaded 42 record(s) from NLV_Farm." },
-  { t: "info: Microsoft.Hosting.Lifetime[0]" },
-  { t: "      Application started. Press Ctrl+C to shut down." },
-];
+   Multiple realistic developer project covers:
+   1. C# (.NET 8 eBOSS.Standard)
+   2. Node.js (TypeScript / Vite / React)
+   3. Python (FastAPI / Uvicorn)
+   4. Rust (Cargo / crates) */
+const PANIC_TEMPLATES = {
+  csharp: {
+    treeHtml: PANIC_TREE_HTML,
+    tabsHtml: PANIC_TABS_HTML,
+    breadcrumbHtml: PANIC_BREADCRUMB_HTML,
+    moduleCount: "1 module",
+    lang: "C#",
+    title: "Program.cs — eBOSS.Standard",
+    code: [
+      '<span class="pl-cmt">// Program.cs</span>',
+      '<span class="pl-key">using</span> System;',
+      '<span class="pl-key">using</span> Microsoft.Extensions.Hosting;',
+      '<span class="pl-key">using</span> Microsoft.Extensions.DependencyInjection;',
+      '<span class="pl-key">using</span> eBOSS.Standard.Services;',
+      "",
+      '<span class="pl-key">namespace</span> eBOSS.Standard',
+      "{",
+      '    <span class="pl-key">public static class</span> <span class="pl-fn">Program</span>',
+      "    {",
+      '        <span class="pl-key">public static void</span> <span class="pl-fn">Main</span>(<span class="pl-key">string</span>[] args)',
+      "        {",
+      '            <span class="pl-key">var</span> host = Host.<span class="pl-fn">CreateDefaultBuilder</span>(args)',
+      '                .<span class="pl-fn">ConfigureServices</span>((ctx, services) =>',
+      "                {",
+      '                    services.<span class="pl-fn">AddSingleton</span>&lt;IFarmService, FarmService&gt;();',
+      '                    services.<span class="pl-fn">AddHostedService</span>&lt;SyncWorker&gt;();',
+      "                })",
+      '                .<span class="pl-fn">Build</span>();',
+      "",
+      "            host.Run();",
+      "        }",
+      "    }",
+      "}",
+    ].join("\n"),
+    lines: [
+      { t: "dotnet build", cmd: true },
+      { t: "" },
+      { t: "  Determining projects to restore..." },
+      { t: "  Restored eBOSS.Standard.csproj (0.8s)" },
+      { t: "  eBOSS.Standard -> bin\\Debug\\net8.0\\eBOSS.Standard.dll" },
+      { t: "" },
+      { t: "Build succeeded." },
+      { t: "    0 Warning(s)" },
+      { t: "    0 Error(s)" },
+      { t: "" },
+      { t: "Time Elapsed 00:00:04.71" },
+      { t: "" },
+      { t: "dotnet run --project eBOSS.Standard", cmd: true },
+      { t: "info: eBOSS.Standard.SyncWorker[0]" },
+      { t: "      Sync worker started." },
+      { t: "info: eBOSS.Standard.FarmService[0]" },
+      { t: "      Loaded 42 record(s) from NLV_Farm." },
+      { t: "info: Microsoft.Hosting.Lifetime[0]" },
+      { t: "      Application started. Press Ctrl+C to shut down." },
+    ],
+  },
+  node: {
+    treeHtml: `
+      <div class="tree-book">
+        <div class="tree-row">
+          <span class="tree-caret codicon codicon-chevron-down"></span>
+          <span class="tree-ico tree-folder codicon codicon-folder-open"></span>
+          <span class="tree-label">client-portal</span>
+        </div>
+        <div class="tree-children">
+          <div class="tree-row tree-file active">
+            <span class="tree-ico codicon codicon-file ext-ts"></span>
+            <span class="tree-label">App.tsx</span>
+          </div>
+          <div class="tree-row tree-file">
+            <span class="tree-ico codicon codicon-file ext-ts"></span>
+            <span class="tree-label">authService.ts</span>
+          </div>
+          <div class="tree-row tree-file">
+            <span class="tree-ico codicon codicon-file ext-default"></span>
+            <span class="tree-label">vite.config.ts</span>
+          </div>
+        </div>
+      </div>`,
+    tabsHtml: ["App.tsx", "authService.ts", "vite.config.ts"].map((name, i) => `
+      <div class="tab${i === 0 ? " active" : ""}">
+        <span class="tab-ico codicon codicon-file ext-ts"></span>
+        <span class="tab-name">${name}</span>
+        <span class="tab-close codicon codicon-close"></span>
+      </div>`).join(""),
+    breadcrumbHtml: `
+      <span class="crumb"><span class="codicon codicon-folder"></span><span>src</span></span>
+      <span class="sep codicon codicon-chevron-right"></span>
+      <span class="crumb"><span class="codicon codicon-folder"></span><span>client-portal</span></span>
+      <span class="sep codicon codicon-chevron-right"></span>
+      <span class="crumb"><span class="codicon codicon-file ext-ts"></span><span>App.tsx</span></span>`,
+    moduleCount: "1 module",
+    lang: "TypeScript JSX",
+    title: "App.tsx — client-portal",
+    code: [
+      '<span class="pl-cmt">// src/App.tsx</span>',
+      '<span class="pl-key">import</span> React, { useState, useEffect } <span class="pl-key">from</span> <span class="pl-str">"react"</span>;',
+      '<span class="pl-key">import</span> { QueryClient, QueryClientProvider } <span class="pl-key">from</span> <span class="pl-str">"@tanstack/react-query"</span>;',
+      '<span class="pl-key">import</span> { AuthGateway } <span class="pl-key">from</span> <span class="pl-str">"./services/authGateway"</span>;',
+      "",
+      '<span class="pl-key">const</span> queryClient = <span class="pl-key">new</span> <span class="pl-fn">QueryClient</span>({',
+      '  defaultOptions: { queries: { refetchOnWindowFocus: <span class="pl-key">false</span>, retry: <span class="pl-num">1</span> } },',
+      '});',
+      "",
+      '<span class="pl-key">export function</span> <span class="pl-fn">App</span>() {',
+      '  <span class="pl-key">const</span> [session, setSession] = <span class="pl-fn">useState</span>&lt;Session | <span class="pl-key">null</span>&gt;(<span class="pl-key">null</span>);',
+      "",
+      '  <span class="pl-fn">useEffect</span>(() => {',
+      '    AuthGateway.<span class="pl-fn">validateSession</span>().<span class="pl-fn">then</span>(setSession);',
+      '  }, []);',
+      "",
+      '  <span class="pl-key">return</span> (',
+      '    &lt;<span class="pl-key">QueryClientProvider</span> client={queryClient}&gt;',
+      '      &lt;<span class="pl-key">DashboardLayout</span> user={session?.user}&gt;',
+      '        &lt;<span class="pl-key">MetricStreams</span> activeHub={<span class="pl-str">"us-east-1"</span>} /&gt;',
+      '      &lt;/<span class="pl-key">DashboardLayout</span>&gt;',
+      '    &lt;/<span class="pl-key">QueryClientProvider</span>&gt;',
+      '  );',
+      '}',
+    ].join("\n"),
+    lines: [
+      { t: "npm run build", cmd: true },
+      { t: "" },
+      { t: "> client-portal@2.4.0 build" },
+      { t: "> vite build" },
+      { t: "vite v5.4.2 building for production..." },
+      { t: "✓ 142 modules transformed." },
+      { t: "dist/index.html                   0.82 kB │ gzip:  0.42 kB" },
+      { t: "dist/assets/index-D1b4d_w.css     14.21 kB │ gzip:  3.68 kB" },
+      { t: "dist/assets/index-C89e41b.js     186.42 kB │ gzip: 58.12 kB" },
+      { t: "✓ built in 620ms" },
+      { t: "" },
+      { t: "npm run dev", cmd: true },
+      { t: "  VITE v5.4.2  ready in 184 ms" },
+      { t: "" },
+      { t: "  >  Local:   http://localhost:5173/" },
+      { t: "  >  Network: use --host to expose" },
+      { t: "  >  press h + enter to show help" },
+    ],
+  },
+  python: {
+    treeHtml: `
+      <div class="tree-book">
+        <div class="tree-row">
+          <span class="tree-caret codicon codicon-chevron-down"></span>
+          <span class="tree-ico tree-folder codicon codicon-folder-open"></span>
+          <span class="tree-label">api-gateway</span>
+        </div>
+        <div class="tree-children">
+          <div class="tree-row tree-file active">
+            <span class="tree-ico codicon codicon-file ext-py"></span>
+            <span class="tree-label">main.py</span>
+          </div>
+          <div class="tree-row tree-file">
+            <span class="tree-ico codicon codicon-file ext-py"></span>
+            <span class="tree-label">models.py</span>
+          </div>
+          <div class="tree-row tree-file">
+            <span class="tree-ico codicon codicon-file ext-default"></span>
+            <span class="tree-label">Dockerfile</span>
+          </div>
+        </div>
+      </div>`,
+    tabsHtml: ["main.py", "models.py", "Dockerfile"].map((name, i) => `
+      <div class="tab${i === 0 ? " active" : ""}">
+        <span class="tab-ico codicon codicon-file ext-py"></span>
+        <span class="tab-name">${name}</span>
+        <span class="tab-close codicon codicon-close"></span>
+      </div>`).join(""),
+    breadcrumbHtml: `
+      <span class="crumb"><span class="codicon codicon-folder"></span><span>src</span></span>
+      <span class="sep codicon codicon-chevron-right"></span>
+      <span class="crumb"><span class="codicon codicon-folder"></span><span>api-gateway</span></span>
+      <span class="sep codicon codicon-chevron-right"></span>
+      <span class="crumb"><span class="codicon codicon-file ext-py"></span><span>main.py</span></span>`,
+    moduleCount: "1 module",
+    lang: "Python",
+    title: "main.py — api-gateway",
+    code: [
+      '<span class="pl-cmt"># main.py - FastAPI Service</span>',
+      '<span class="pl-key">from</span> fastapi <span class="pl-key">import</span> FastAPI, Depends, HTTPException, status',
+      '<span class="pl-key">from</span> pydantic <span class="pl-key">import</span> BaseModel',
+      '<span class="pl-key">from</span> contextlib <span class="pl-key">import</span> asynccontextmanager',
+      '<span class="pl-key">import</span> uvicorn',
+      "",
+      '<span class="pl-key">@asynccontextmanager</span>',
+      '<span class="pl-key">async def</span> <span class="pl-fn">lifespan</span>(app: FastAPI):',
+      '    <span class="pl-fn">print</span>(<span class="pl-str">"Starting async engine connection pool..."</span>)',
+      '    <span class="pl-key">yield</span>',
+      '    <span class="pl-fn">print</span>(<span class="pl-str">"Closing async engine connection pool..."</span>)',
+      "",
+      'app = <span class="pl-fn">FastAPI</span>(title=<span class="pl-str">"API Gateway Service"</span>, version=<span class="pl-str">"1.0.0"</span>, lifespan=lifespan)',
+      "",
+      '<span class="pl-key">@app.get</span>(<span class="pl-str">"/healthz"</span>)',
+      '<span class="pl-key">async def</span> <span class="pl-fn">health_check</span>():',
+      '    <span class="pl-key">return</span> {<span class="pl-str">"status"</span>: <span class="pl-str">"healthy"</span>, <span class="pl-str">"upstream"</span>: <span class="pl-str">"ok"</span>}',
+    ].join("\n"),
+    lines: [
+      { t: "pytest tests/ -v", cmd: true },
+      { t: "============================= test session starts ==============================" },
+      { t: "platform linux -- Python 3.12.3, pytest-8.1.1, pluggy-1.4.0" },
+      { t: "rootdir: /app, configfile: pyproject.toml" },
+      { t: "collected 18 items" },
+      { t: "" },
+      { t: "tests/test_auth.py::test_jwt_validation PASSED                            [  5%]" },
+      { t: "tests/test_routes.py::test_health_check PASSED                           [ 11%]" },
+      { t: "tests/test_routes.py::test_telemetry_batch PASSED                         [ 16%]" },
+      { t: "18 passed in 1.42s" },
+      { t: "" },
+      { t: "uvicorn main:app --host 0.0.0.0 --port 8000 --reload", cmd: true },
+      { t: "INFO:     Will watch for changes in ['/app']" },
+      { t: "INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)" },
+      { t: "INFO:     Started reloader process [4921] using WatchFiles" },
+      { t: "INFO:     Started server process [4923]" },
+      { t: "INFO:     Waiting for application startup." },
+      { t: "Starting async engine connection pool..." },
+      { t: "INFO:     Application startup complete." },
+    ],
+  },
+  rust: {
+    treeHtml: `
+      <div class="tree-book">
+        <div class="tree-row">
+          <span class="tree-caret codicon codicon-chevron-down"></span>
+          <span class="tree-ico tree-folder codicon codicon-folder-open"></span>
+          <span class="tree-label">tokio-mesh</span>
+        </div>
+        <div class="tree-children">
+          <div class="tree-row tree-file active">
+            <span class="tree-ico codicon codicon-file ext-rs"></span>
+            <span class="tree-label">main.rs</span>
+          </div>
+          <div class="tree-row tree-file">
+            <span class="tree-ico codicon codicon-file ext-rs"></span>
+            <span class="tree-label">router.rs</span>
+          </div>
+          <div class="tree-row tree-file">
+            <span class="tree-ico codicon codicon-file ext-default"></span>
+            <span class="tree-label">Cargo.toml</span>
+          </div>
+        </div>
+      </div>`,
+    tabsHtml: ["main.rs", "router.rs", "Cargo.toml"].map((name, i) => `
+      <div class="tab${i === 0 ? " active" : ""}">
+        <span class="tab-ico codicon codicon-file ext-rs"></span>
+        <span class="tab-name">${name}</span>
+        <span class="tab-close codicon codicon-close"></span>
+      </div>`).join(""),
+    breadcrumbHtml: `
+      <span class="crumb"><span class="codicon codicon-folder"></span><span>src</span></span>
+      <span class="sep codicon codicon-chevron-right"></span>
+      <span class="crumb"><span class="codicon codicon-folder"></span><span>tokio-mesh</span></span>
+      <span class="sep codicon codicon-chevron-right"></span>
+      <span class="crumb"><span class="codicon codicon-file ext-rs"></span><span>main.rs</span></span>`,
+    moduleCount: "1 module",
+    lang: "Rust",
+    title: "main.rs — tokio-mesh",
+    code: [
+      '<span class="pl-cmt">// src/main.rs</span>',
+      '<span class="pl-key">use</span> tokio::net::TcpListener;',
+      '<span class="pl-key">use</span> std::sync::Arc;',
+      "",
+      '<span class="pl-key">#[tokio::main]</span>',
+      '<span class="pl-key">async fn</span> <span class="pl-fn">main</span>() -> Result&lt;(), Box&lt;<span class="pl-key">dyn</span> std::error::Error&gt;&gt; {',
+      '    <span class="pl-key">let</span> addr = <span class="pl-str">"127.0.0.1:8080"</span>;',
+      '    <span class="pl-key">let</span> listener = TcpListener::<span class="pl-fn">bind</span>(addr).<span class="pl-key">await</span>?;',
+      '    println!(<span class="pl-str">"Listening on: {}"</span>, addr);',
+      "",
+      '    <span class="pl-key">loop</span> {',
+      '        <span class="pl-key">let</span> (socket, peer) = listener.<span class="pl-fn">accept</span>().<span class="pl-key">await</span>?;',
+      '        tokio::<span class="pl-fn">spawn</span>(<span class="pl-key">async move</span> {',
+      '            <span class="pl-fn">process_socket</span>(socket, peer).<span class="pl-key">await</span>;',
+      '        });',
+      '    }',
+      '}',
+    ].join("\n"),
+    lines: [
+      { t: "cargo check", cmd: true },
+      { t: "    Checking tokio-mesh v0.3.1 (/home/dev/tokio-mesh)" },
+      { t: "    Finished `dev` profile [unoptimized + debuginfo] in 0.68s" },
+      { t: "" },
+      { t: "cargo run", cmd: true },
+      { t: "    Finished `dev` profile [unoptimized + debuginfo] in 0.04s" },
+      { t: "     Running `target/debug/tokio-mesh`" },
+      { t: "2026-09-28T03:15:02.102Z INFO  tokio_mesh > Server initializing..." },
+      { t: "2026-09-28T03:15:02.104Z INFO  tokio_mesh > Listening on: 127.0.0.1:8080" },
+      { t: "2026-09-28T03:15:02.105Z INFO  tokio_mesh > Cluster heartbeat established (peer_count: 5)" },
+    ],
+  },
+};
+const PANIC_CODE = PANIC_TEMPLATES.csharp.code;
+const PANIC_TERM_LINES = PANIC_TEMPLATES.csharp.lines;
 
 /* ============================ Go ========================================== */
 const VSCODE_LOGO =
   '<svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" clip-rule="evenodd" d="M23.15 2.587L18.21.21a1.494 1.494 0 0 0-1.705.29l-9.46 8.63-4.12-3.128a.999.999 0 0 0-1.276.057L.327 7.261A1 1 0 0 0 .326 8.74L3.899 12 .326 15.26a1 1 0 0 0 .001 1.479L1.65 17.94a.999.999 0 0 0 1.276.057l4.12-3.128 9.46 8.63a1.492 1.492 0 0 0 1.704.29l4.942-2.377A1.5 1.5 0 0 0 24 20.06V3.939a1.5 1.5 0 0 0-.85-1.352zm-5.146 14.861L10.826 12l7.178-5.448v10.896z" fill="#0098FF"/></svg>';
+/* ============================ Statusbar Stealth Reader (Thief Mode) ========= */
+const thiefReader = {
+  active: false,
+  pIdx: 0,
+  init() {
+    const prev = $("#st-thief-prev");
+    const next = $("#st-thief-next");
+    if (prev) prev.addEventListener("click", (e) => { e.stopPropagation(); this.step(-1); });
+    if (next) next.addEventListener("click", (e) => { e.stopPropagation(); this.step(1); });
+  },
+  toggle(force) {
+    this.active = force !== undefined ? force : !this.active;
+    const bar = $("#st-thief");
+    if (bar) bar.hidden = !this.active;
+    if (this.active) this.render();
+  },
+  step(delta) {
+    if (!state.current || !state.current.chapter) return;
+    const ch = state.current.chapter;
+    const blocks = (ch._blocks || ch.blocks || []).filter((b) => b.type === "p");
+    if (!blocks.length) return;
+    this.pIdx = Math.max(0, Math.min(blocks.length - 1, this.pIdx + delta));
+    this.render();
+  },
+  render() {
+    const textEl = $("#st-thief-text");
+    if (!textEl) return;
+    if (!state.current || !state.current.chapter) {
+      textEl.textContent = "No module loaded";
+      return;
+    }
+    const ch = state.current.chapter;
+    const blocks = (ch._blocks || ch.blocks || []).filter((b) => b.type === "p");
+    if (!blocks.length) {
+      textEl.textContent = "No text content";
+      return;
+    }
+    if (this.pIdx >= blocks.length) this.pIdx = 0;
+    const p = blocks[this.pIdx];
+    textEl.textContent = `[${this.pIdx + 1}/${blocks.length}] ${p.text || ""}`;
+    textEl.title = p.text || "";
+  }
+};
+window.thiefReader = thiefReader;
+
 injectIcons();
 document.querySelectorAll(".vsclogo").forEach((e) => (e.innerHTML = VSCODE_LOGO));
+thiefReader.init();
 boot();

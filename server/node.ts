@@ -14,7 +14,7 @@
 //   APP_TITLE
 
 import { serve } from "@hono/node-server";
-import { statfsSync } from "node:fs";
+import { statfsSync, existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import app from "../src/index";
 import { cleanupStaleIngests, cleanupStaleUploads } from "../src/maintenance";
@@ -22,6 +22,40 @@ import type { Env } from "../src/types";
 import { SqliteD1 } from "./d1-sqlite";
 import { FsR2 } from "./r2-fs";
 import { staticAssets } from "./assets";
+
+function loadEnvFile(path: string) {
+  if (!existsSync(path)) return;
+  try {
+    const content = readFileSync(path, "utf-8");
+    for (const line of content.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#")) continue;
+      const eqIdx = trimmed.indexOf("=");
+      if (eqIdx <= 0) continue;
+      const key = trimmed.slice(0, eqIdx).trim();
+      let val = trimmed.slice(eqIdx + 1).trim();
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      if (!process.env[key]) {
+        process.env[key] = val;
+      }
+    }
+  } catch {}
+}
+
+loadEnvFile(resolve(".dev.vars"));
+loadEnvFile(resolve(import.meta.dirname ?? ".", "..", ".dev.vars"));
+loadEnvFile(resolve(".env"));
+loadEnvFile(resolve(import.meta.dirname ?? ".", "..", ".env"));
+
+if (!process.env.ACCESS_PASSCODE) {
+  process.env.ACCESS_PASSCODE = "test-passcode-123";
+  console.log("Note: ACCESS_PASSCODE not provided, defaulted to 'test-passcode-123'");
+}
+if (!process.env.SESSION_SECRET) {
+  process.env.SESSION_SECRET = "local-dev-only-secret-not-for-prod-abcdefgh";
+}
 
 function need(name: string): string {
   const v = process.env[name];

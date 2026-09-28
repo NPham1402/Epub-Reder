@@ -13,7 +13,7 @@
 //
 // Bump these when a shell asset changes shape in a way a revalidate might not
 // catch cleanly (rare — revalidate normally makes this unnecessary).
-const SHELL_CACHE = "epub-reader-shell-v1";
+const SHELL_CACHE = "epub-reader-shell-v8";
 const DATA_CACHE = "epub-reader-data-v1";
 const KEEP = new Set([SHELL_CACHE, DATA_CACHE]);
 
@@ -51,6 +51,17 @@ async function networkFirst(req) {
 }
 
 async function staleWhileRevalidate(req) {
+  const url = new URL(req.url);
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+    try {
+      const res = await fetch(req);
+      if (res.ok) {
+        const cache = await caches.open(SHELL_CACHE);
+        cache.put(req, res.clone());
+        return res;
+      }
+    } catch {}
+  }
   const cache = await caches.open(SHELL_CACHE);
   const cached = await cache.match(req);
   const network = fetch(req).then((res) => {

@@ -13,8 +13,11 @@
     Start Menu/taskbar entry and icon, no address bar. -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#3c3c3c" id="meta-theme-color" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/codicon.css" />
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="/styles.css?v=2.4" />
   </head>
   <body>
     <!-- ===================== IDE SHELL ===================== -->
@@ -22,14 +25,28 @@
       <!-- Title bar -->
       <header class="titlebar">
         <div class="tb-left">
+          <button id="btn-mobile-menu" class="tb-icon tb-mobile-btn ico" data-icon="menu" title="Toggle Explorer"></button>
           <span class="tb-logo vsclogo"></span>
-          <nav class="tb-menu">
-            <span>File</span><span>Edit</span><span>Selection</span><span>View</span>
-            <span>Go</span><span>Run</span><span>Terminal</span><span>Help</span>
+          <nav class="tb-menu" id="tb-menu">
+            <span data-menu="file">File</span>
+            <span data-menu="edit">Edit</span>
+            <span data-menu="selection">Selection</span>
+            <span data-menu="view">View</span>
+            <span data-menu="go">Go</span>
+            <span data-menu="terminal">Terminal</span>
+            <span data-menu="help">Help</span>
           </nav>
         </div>
-        <div class="tb-center" id="tb-title">workspace — devdocs</div>
+        <div class="tb-center" id="tb-title" title="Quick Open & Commands (Ctrl+P)">
+          <div class="tb-search-box">
+            <span class="ico" data-icon="search"></span>
+            <span class="tb-title-text">workspace — devdocs</span>
+            <kbd class="tb-search-hint">Ctrl+P</kbd>
+          </div>
+        </div>
         <div class="tb-right">
+          <button id="btn-toggle-chat" class="tb-icon tb-chat-btn ico" data-icon="sparkle" title="Claude Code (Ctrl+L)"></button>
+          <button id="btn-toggle-viewmode" class="tb-icon ico" data-icon="book" title="Switch Reader Mode (Code / Doc Preview)"></button>
           <button id="btn-upload" class="tb-icon ico" data-icon="plus" title="Import module (Ctrl+Shift+U)"></button>
           <button id="btn-settings" class="tb-icon ico" data-icon="settings" title="Settings"></button>
           <span class="tb-win ico" data-icon="win-min"></span>
@@ -46,6 +63,7 @@
           <div class="ab-icon ico" data-icon="git-branch" data-view="scm" title="Source Control"></div>
           <div class="ab-icon ico" data-icon="run" data-view="run" title="Run and Debug"></div>
           <div class="ab-icon ico" data-icon="extensions" data-view="extensions" title="Extensions"></div>
+          <div class="ab-icon ico" id="ab-chat" data-icon="sparkle" title="Claude Code (Ctrl+L)"></div>
           <div class="ab-spacer"></div>
           <div class="ab-icon ico" id="btn-account" data-icon="account" title="Account"></div>
         </div>
@@ -96,50 +114,163 @@
           </div>
         </aside>
 
-        <!-- Editor group -->
-        <main class="editorgroup">
-          <div class="tabs" id="tabs"></div>
-          <div class="breadcrumbs" id="breadcrumbs"></div>
-          <div class="editor-wrap">
-            <div class="editor" id="editor">
-              <div class="welcome" id="welcome">
-                <div class="welcome-logo vsclogo"></div>
-                <div class="welcome-title">devdocs</div>
-                <p>Open a file from the explorer to read its documentation.</p>
-                <div class="welcome-keys">
-                  <div><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>U</kbd><span>Import module</span></div>
-                  <div><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>T</kbd><span>Reveal real titles</span></div>
-                  <div><kbd>Alt</kbd><kbd>1…9</kbd><span>Switch tab</span></div>
-                  <div><kbd>←</kbd><kbd>→</kbd> or <kbd>A</kbd><kbd>D</kbd><span>Navigate chapters</span></div>
-                  <div><kbd>W</kbd><kbd>S</kbd><span>Scroll up / down</span></div>
-                  <div><kbd>\</kbd><span>Focus mode: open (type unlock phrase in Settings to close)</span></div>
-                </div>
+        <!-- Workbench Split Container: Holds Primary Editor Group and Secondary Claude Code Tab Group (Matching Image 3) -->
+        <div class="workbench-split" id="workbench-split">
+          <!-- Primary Editor Group (Code Editor / Reader) -->
+          <main class="editorgroup editorgroup-primary" id="editorgroup-primary">
+            <div class="tabs-header">
+              <div class="tabs" id="tabs"></div>
+              <div class="editor-actions">
+                <button type="button" id="btn-split-claude" class="ed-act-btn claude-act-star" title="Open Claude Code Tab (Ctrl+L)">
+                  <svg class="claude-brand-asterisk" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14" stroke="#d97757" stroke-width="2.8" stroke-linecap="round"/>
+                  </svg>
+                </button>
+                <button type="button" id="btn-split-editor" class="ed-act-btn codicon codicon-split-horizontal" title="Split Editor Right"></button>
+                <button type="button" id="btn-more-actions" class="ed-act-btn codicon codicon-more" title="More Actions..."></button>
               </div>
-              <div class="monaco-host" id="monaco-host" hidden></div>
-              <div class="ext-page" id="ext-page" hidden></div>
-              <!-- Boss-key cover: swapped in over just this pane (title bar,
-              activity bar, sidebar chrome and status bar stay exactly as
-              they were), so switching to it looks like changing files, not
-              like the whole window changing shape. -->
-              <div class="panic-editor" id="panic-editor" hidden>
-                <pre id="panic-code" class="panic-code"></pre>
-                <div class="panic-terminal">
-                  <div class="pt-head">PROBLEMS &nbsp; OUTPUT &nbsp; <b>TERMINAL</b> &nbsp; PORTS</div>
-                  <pre id="panic-term" class="pt-body"></pre>
+            </div>
+            <div class="breadcrumbs" id="breadcrumbs"></div>
+            <div class="editor-wrap">
+              <div class="editor" id="editor">
+                <div class="welcome" id="welcome">
+                  <div class="welcome-logo vsclogo"></div>
+                  <div class="welcome-title">devdocs</div>
+                  <p>Open a file from the explorer to read its documentation.</p>
+                  <div class="welcome-keys">
+                    <div><kbd>Ctrl</kbd><kbd>P</kbd><span>Quick open / Command Palette</span></div>
+                    <div><kbd>Ctrl</kbd><kbd>G</kbd><span>Go to chapter...</span></div>
+                    <div><kbd>Alt</kbd><kbd>M</kbd><span>Toggle Technical Doc / Code Mode</span></div>
+                    <div><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>U</kbd><span>Import module</span></div>
+                    <div><kbd>Ctrl</kbd><kbd>Alt</kbd><kbd>T</kbd><span>Reveal real titles</span></div>
+                    <div><kbd>Alt</kbd><kbd>1…9</kbd><span>Switch tab</span></div>
+                    <div><kbd>←</kbd><kbd>→</kbd> or <kbd>A</kbd><kbd>D</kbd><span>Navigate chapters (or swipe on touch)</span></div>
+                    <div><kbd>W</kbd><kbd>S</kbd><span>Scroll up / down</span></div>
+                    <div><kbd>\</kbd><span>Focus mode: open (type unlock phrase in Settings to close)</span></div>
+                  </div>
+                </div>
+                <div class="monaco-host" id="monaco-host" hidden></div>
+                <div class="doc-host" id="doc-host" hidden></div>
+                <div class="ext-page" id="ext-page" hidden></div>
+                <!-- Boss-key cover: swapped in over just this pane (title bar,
+                activity bar, sidebar chrome and status bar stay exactly as
+                they were), so switching to it looks like changing files, not
+                like the whole window changing shape. -->
+                <div class="panic-editor" id="panic-editor" hidden>
+                  <pre id="panic-code" class="panic-code"></pre>
+                  <div class="panic-terminal">
+                    <div class="pt-head">PROBLEMS &nbsp; OUTPUT &nbsp; <b>TERMINAL</b> &nbsp; PORTS</div>
+                    <pre id="panic-term" class="pt-body"></pre>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-        </main>
+          </main>
+
+          <!-- Split Sash / Divider -->
+          <div class="editor-sash" id="editor-sash" hidden></div>
+
+          <!-- Secondary Editor Group: Claude Code Split Tab Group (Matching Image 3) -->
+          <aside class="editorgroup editorgroup-claude" id="ai-sidebar" hidden>
+            <!-- Tabs Bar for Claude Code Pane matching Image 3 -->
+            <div class="tabs-header claude-tabs-header">
+              <div class="tabs claude-editor-tabs" id="claude-tabs-bar">
+                <div class="tab claude-tab" data-session="workflow" title="Phân trình ký dự án">
+                  <span class="claude-tab-icon">
+                    <svg class="claude-brand-asterisk" width="13" height="13" viewBox="0 0 24 24" fill="none">
+                      <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14" stroke="#d97757" stroke-width="2.8" stroke-linecap="round"/>
+                    </svg>
+                  </span>
+                  <span class="tab-name">Phân trình ký dự án</span>
+                  <span class="tab-close codicon codicon-close" data-close="workflow"></span>
+                </div>
+                <div class="tab claude-tab active" data-session="social" title="frmPersonnelSocialInsuranceFollow">
+                  <span class="claude-tab-icon">
+                    <svg class="claude-brand-asterisk" width="13" height="13" viewBox="0 0 24 24" fill="none">
+                      <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14" stroke="#d97757" stroke-width="2.8" stroke-linecap="round"/>
+                    </svg>
+                  </span>
+                  <span class="tab-name">frmPersonnelSocialInsura...</span>
+                  <span class="tab-close codicon codicon-close" data-close="social"></span>
+                </div>
+                <div class="tab claude-tab" data-session="home" title="Claude Code">
+                  <span class="claude-tab-icon">
+                    <svg class="claude-brand-asterisk" width="13" height="13" viewBox="0 0 24 24" fill="none">
+                      <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14" stroke="#d97757" stroke-width="2.8" stroke-linecap="round"/>
+                    </svg>
+                  </span>
+                  <span class="tab-name">Claude Code</span>
+                  <span class="tab-close codicon codicon-close" data-close="home"></span>
+                </div>
+              </div>
+              <div class="editor-actions">
+                <button type="button" id="ai-new-tab-btn" class="ed-act-btn codicon codicon-add" title="New Session Tab"></button>
+                <button type="button" id="ai-view-toggle" class="ed-act-btn codicon codicon-screen-full" title="Toggle Full Width / Split (Alt+V)"></button>
+                <button type="button" id="ai-close-chat" class="ed-act-btn codicon codicon-close" title="Close Split Editor (Ctrl+L)"></button>
+              </div>
+            </div>
+
+            <!-- Subheader below tabs: Session Title + Clock/Chat Icons matching Image 3 -->
+            <div class="claude-sub-header">
+              <span class="claude-sub-title" id="ai-ws-pill">frmPersonnelSocialInsuranceFollow code r...</span>
+              <div class="claude-sub-actions">
+                <button type="button" class="claude-nav-btn codicon codicon-history" id="ai-history-btn" title="Recent Sessions (55m)"></button>
+                <button type="button" class="claude-nav-btn codicon codicon-comment" id="ai-new-chat" title="New Session"></button>
+              </div>
+            </div>
+
+            <!-- Main Stream Area (Holds Empty Welcome Screen or Messages) -->
+            <div class="claude-scroll-body" id="claude-scroll-body">
+              <div class="claude-content-flow" id="ai-messages"></div>
+            </div>
+
+            <!-- Bottom Docked Input Area matching Image 3 -->
+            <div class="claude-docked-input-wrap">
+              <div class="claude-bottom-hint" id="claude-bottom-hint" hidden>
+                <span class="codicon codicon-window"></span> Prefer the Terminal experience? Switch back in Settings. <span class="claude-hint-close" id="claude-hint-close">×</span>
+              </div>
+              <div class="claude-input-card">
+                <div class="claude-input-row">
+                  <textarea id="ai-prompt-input" class="claude-prompt-input" rows="1" placeholder="ctrl esc to focus or unfocus Claude" spellcheck="false"></textarea>
+                  <button type="button" class="claude-mic-btn codicon codicon-mic" title="Voice Dictation"></button>
+                </div>
+                <div class="claude-input-toolbar">
+                  <div class="claude-toolbar-left">
+                    <button type="button" class="claude-tool-icon-btn" title="Add File / Context (+)"><span class="codicon codicon-add"></span></button>
+                    <button type="button" class="claude-tool-icon-btn" title="Split Panel / Task Layout"><span class="codicon codicon-layout-panel"></span></button>
+                    <span class="claude-ctx-pill" id="ai-ctx-pill" title="Context Token Budget"><span>( )</span> 55m</span>
+                    <select id="ai-model-select" class="claude-model-select" title="Switch Model">
+                      <option value="sonnet-5" selected>Sonnet 5 High</option>
+                      <option value="opus-5-5">Opus 5.5</option>
+                      <option value="sonnet-3-7">Sonnet 3.7 High</option>
+                    </select>
+                    <span class="claude-file-ctx-tag" id="ai-active-file-tag" title="Active File Context"><span class="codicon codicon-json"></span> canvas.json <span class="claude-tag-close">×</span></span>
+                  </div>
+                  <div class="claude-toolbar-right">
+                    <span class="claude-auto-pill" title="Autonomous Execution"><span class="codicon codicon-zap"></span> Auto</span>
+                    <button id="ai-send-btn" class="claude-send-pill" title="Send (Enter)"><span class="codicon codicon-arrow-up"></span></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
       </div>
 
       <!-- Status bar -->
       <footer class="statusbar">
         <div class="st-left">
+          <span class="st-remote" id="st-remote" title="WSL: Ubuntu (Remote Development)"><span class="ico" data-icon="vm-connect"></span> WSL: Ubuntu</span>
           <span class="st-item st-branch"><span class="ico" data-icon="git-branch"></span> main*</span>
           <span class="st-item"><span class="ico" data-icon="error"></span> 0 <span class="ico" data-icon="warning"></span> 0</span>
           <span class="st-item ico" id="st-sync" data-icon="sync"></span>
           <span class="st-item st-reveal" id="st-reveal" hidden><span class="ico" data-icon="eye"></span> titles</span>
+          <span class="st-thief" id="st-thief" title="Stealth Reader (Alt+[ / Alt+])" hidden>
+            <span class="codicon codicon-bracket"></span>
+            <span class="st-thief-text" id="st-thief-text">Ready</span>
+            <span class="st-thief-btn" id="st-thief-prev" title="Previous (Alt+[)">‹</span>
+            <span class="st-thief-btn" id="st-thief-next" title="Next (Alt+])">›</span>
+          </span>
         </div>
         <div class="st-right">
           <span class="st-item" id="st-pos">Ln 1, Col 1</span>
@@ -196,11 +327,44 @@
           <button class="modal-close ico" data-icon="close" data-close="settings"></button>
         </div>
         <label class="setting-row">
+          <span>Reader mode</span>
+          <select id="opt-viewmode" class="setting-select">
+            <option value="code">Source Code (Monaco Editor)</option>
+            <option value="doc">Technical Doc Preview</option>
+          </select>
+        </label>
+        <label class="setting-row">
+          <span>Font family</span>
+          <select id="opt-font-family" class="setting-select">
+            <option value="mono">Cascadia / Consolas (Mono)</option>
+            <option value="jetbrains">JetBrains Mono</option>
+            <option value="fira">Fira Code</option>
+            <option value="inter">Inter (Sans / Tech Doc)</option>
+            <option value="literata">Literata (Serif / Novel)</option>
+          </select>
+        </label>
+        <label class="setting-row">
+          <span>Text alignment</span>
+          <select id="opt-text-align" class="setting-select">
+            <option value="left">Left-aligned</option>
+            <option value="justify">Justified</option>
+          </select>
+        </label>
+        <label class="setting-row">
+          <span>Boss-key disguise template</span>
+          <select id="opt-panic-template" class="setting-select">
+            <option value="csharp">C# (.NET 8 build)</option>
+            <option value="node">Node.js (TypeScript / Vite / React)</option>
+            <option value="python">Python (FastAPI / Uvicorn)</option>
+            <option value="rust">Rust (Cargo / crates)</option>
+          </select>
+        </label>
+        <label class="setting-row">
           <input type="checkbox" id="opt-blur" />
           <span>Focus mode when window loses focus <small>(auto-hide reading)</small></span>
         </label>
         <label class="setting-row">
-          <span>Boss-key unlock phrase <small>(type this while the cover screen shows to dismiss it — resists random key-mashing)</small></span>
+          <span>Boss-key unlock phrase <small>(type this while cover screen shows to dismiss)</small></span>
           <input type="text" id="opt-panic-code" class="setting-input" autocomplete="off" spellcheck="false" />
         </label>
         <label class="setting-row">
@@ -209,7 +373,7 @@
         </label>
         <label class="setting-row">
           <input type="checkbox" id="opt-serif" />
-          <span>Comfortable reading font <small>(easier on the eyes)</small></span>
+          <span>Comfortable reading font <small>(fallback serif for code view)</small></span>
         </label>
         <label class="setting-row">
           <input type="checkbox" id="opt-focus" />
@@ -239,12 +403,41 @@
       </div>
     </div>
 
+    <!-- Quick Pick / Command Palette (Ctrl+P / Ctrl+Shift+P / Ctrl+G) -->
+    <div id="quick-pick" class="quick-pick-backdrop" hidden>
+      <div class="quick-pick-modal">
+        <div class="qp-input-wrap">
+          <span class="qp-icon ico codicon codicon-search"></span>
+          <input id="qp-input" class="qp-input" type="text" placeholder="Type a command or search chapters..." spellcheck="false" autocomplete="off" />
+        </div>
+        <div id="qp-list" class="qp-list"></div>
+        <div class="qp-footer">
+          <span><kbd>↑</kbd><kbd>↓</kbd> navigate</span>
+          <span><kbd>↵</kbd> select</span>
+          <span><kbd>esc</kbd> close</span>
+          <span><kbd>&gt;</kbd> commands &nbsp;|&nbsp; <kbd>:</kbd> chapter #</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Dropdown menu -->
+    <div id="menu-dropdown" class="menu-dropdown" hidden></div>
+
+    <!-- Context menu -->
+    <div id="context-menu" class="context-menu" hidden></div>
+
+    <!-- Mobile sidebar backdrop overlay -->
+    <div id="sidebar-backdrop" class="sidebar-backdrop" hidden></div>
+
     <div class="toasts" id="toasts" hidden></div>
 
-    <script src="/app.js"></script>
-    <script src="/extensions.js"></script>
-    <script src="/sync.js"></script>
-    <script src="/insights.js"></script>
-    <script src="/search.js"></script>
+    <script src="/app.js?v=2.4"></script>
+    <script src="/docview.js?v=2.4"></script>
+    <script src="/palette.js?v=2.4"></script>
+    <script src="/extensions.js?v=2.4"></script>
+    <script src="/sync.js?v=2.4"></script>
+    <script src="/insights.js?v=2.4"></script>
+    <script src="/search.js?v=2.4"></script>
+    <script src="/chat.js?v=2.4"></script>
   </body>
 </html>

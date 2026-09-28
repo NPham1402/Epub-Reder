@@ -13,7 +13,7 @@
     "db:migrate:local": "wrangler d1 migrations apply epub_reader_db --local",
     "build:monaco": "node client/build-monaco.mjs",
     "build:server": "esbuild server/node.ts --bundle --platform=node --format=esm --target=node24 --external:node:sqlite --outfile=dist/server.mjs && esbuild server/backup.ts --bundle --platform=node --format=esm --target=node24 --external:node:sqlite --outfile=dist/backup.mjs",
-    "start:server": "node --disable-warning=ExperimentalWarning dist/server.mjs",
+    "start:server": "npm run build:server && node --disable-warning=ExperimentalWarning dist/server.mjs",
     "typecheck:server": "tsc --noEmit -p tsconfig.server.json",
     "test": "npm run build:server && node --disable-warning=ExperimentalWarning --test \"tests/**/*.test.ts\"",
     "test:unit": "node --disable-warning=ExperimentalWarning --test tests/unit.test.ts"

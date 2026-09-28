@@ -5,3 +5,7 @@ public/vendor/
 .dev.vars
 *.log
 .DS_Store
+data/
+*.epub
+*.tar.zst
+*.msi

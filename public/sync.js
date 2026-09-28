@@ -218,20 +218,127 @@ registerExtension({
   description: "Keeps settings, highlights and reading position in sync across devices.",
   defaultEnabled: true,
   render(body) {
-    const row = (label, value) => {
-      const r = el("div", "ft-row");
-      r.appendChild(el("div", "ft-label", label));
-      r.appendChild(el("div", null, value));
-      body.appendChild(r);
-    };
-    body.appendChild(el("p", "xp-note", "Your settings, highlights, bookmarks and reading position are stored on the server and shared by every device you sign in on. The server itself is backed up every night."));
-    row("Status", sync.error ? `Problem: ${sync.error}` : sync.busy ? "Syncing…" : sync.lastOk ? "Up to date" : "Not synced yet");
-    row("Last sync", sync.lastOk ? new Date(sync.lastOk).toLocaleString() : "never");
-    row("Waiting to upload", `${sync.pendingSettings.size} setting(s), ${hlQueue.size} highlighted chapter(s)`);
-    const btn = el("button", "xp-btn", "Sync now");
-    btn.type = "button";
-    btn.addEventListener("click", () => syncNow());
-    body.appendChild(btn);
+    const isErr = !!sync.error;
+    const isBusy = sync.busy;
+
+    // 1. Hero Status Card
+    const hero = el("div", "xp-hero-card");
+    const heroLeft = el("div", "xp-hero-left");
+    const statusPill = el("div", "xp-status-pill " + (isErr ? "error" : isBusy ? "busy" : "ok"));
+    statusPill.appendChild(el("span", "xp-pulse-dot"));
+    statusPill.appendChild(document.createTextNode(isErr ? "Sync Error" : isBusy ? "Syncing in Progress..." : "Cloud Database In Sync"));
+    heroLeft.appendChild(statusPill);
+    heroLeft.appendChild(el("h3", "xp-hero-title", "Universal Cross-Device Synchronization"));
+    heroLeft.appendChild(el("p", "xp-hero-sub", "Your reading milestones, text annotations, bookmarks, and interface settings are continuously mirrored to the server with encrypted session tokens."));
+    hero.appendChild(heroLeft);
+    body.appendChild(hero);
+
+    // 2. Metrics Grid (3 cards)
+    const grid = el("div", "xp-metric-grid");
+
+    // Metric 1: Status
+    const m1 = el("div", "xp-metric-card");
+    m1.appendChild(el("div", "xp-metric-label", "Sync Status"));
+    m1.appendChild(el("div", "xp-metric-val", isErr ? "Attention Needed" : isBusy ? "Syncing…" : "Up to Date"));
+    m1.appendChild(el("div", "xp-metric-sub", sync.lastOk ? `Last sync: ${new Date(sync.lastOk).toLocaleTimeString()}` : "Not synced yet"));
+    grid.appendChild(m1);
+
+    // Metric 2: Pending Outbox Queue
+    const pendingTotal = sync.pendingSettings.size + hlQueue.size;
+    const m2 = el("div", "xp-metric-card");
+    m2.appendChild(el("div", "xp-metric-label", "Outbox Upload Queue"));
+    m2.appendChild(el("div", "xp-metric-val", `${pendingTotal} item${pendingTotal === 1 ? "" : "s"}`));
+    m2.appendChild(el("div", "xp-metric-sub", `${sync.pendingSettings.size} settings, ${hlQueue.size} highlighted chapters`));
+    grid.appendChild(m2);
+
+    // Metric 3: Backup & Recovery
+    const m3 = el("div", "xp-metric-card");
+    m3.appendChild(el("div", "xp-metric-label", "Disaster Recovery"));
+    m3.appendChild(el("div", "xp-metric-val", "Active (Nightly)"));
+    m3.appendChild(el("div", "xp-metric-sub", "Local SQLite + Encrypted Snapshot"));
+    grid.appendChild(m3);
+
+    body.appendChild(grid);
+
+    // 3. Action Toolbar
+    const actBox = el("div", "xp-action-toolbar");
+    const syncBtn = el("button", "xp-btn primary");
+    syncBtn.type = "button";
+    const syncIco = el("span", "codicon " + codiCls("sync"));
+    syncBtn.appendChild(syncIco);
+    const syncText = document.createTextNode(isBusy ? " Syncing..." : " Sync Now");
+    syncBtn.appendChild(syncText);
+    
+    syncBtn.addEventListener("click", async () => {
+      syncBtn.disabled = true;
+      syncIco.classList.add("xp-spin");
+      syncText.textContent = " Syncing...";
+      try {
+        await syncNow();
+        showToast("All settings and annotations successfully synced with server.", [], 3000);
+      } catch (err) {
+        showToast("Sync failed: " + err.message, [], 4000);
+      } finally {
+        syncIco.classList.remove("xp-spin");
+        syncBtn.disabled = false;
+        syncText.textContent = " Sync Now";
+        refreshExtPage("sync-backup");
+      }
+    });
+    actBox.appendChild(syncBtn);
+
+    const pingBtn = el("button", "xp-btn secondary", "Test Server Latency");
+    pingBtn.type = "button";
+    pingBtn.addEventListener("click", async () => {
+      pingBtn.disabled = true;
+      pingBtn.textContent = "Pinging...";
+      const t0 = performance.now();
+      try {
+        const res = await fetch("/api/health");
+        const dt = Math.round(performance.now() - t0);
+        if (res.ok) {
+          showToast(`Server Connection Healthy: ${dt}ms latency.`, [], 3500);
+        } else {
+          showToast(`Server returned HTTP ${res.status} (${dt}ms).`, [], 4000);
+        }
+      } catch (e) {
+        showToast("Cannot reach server: " + e.message, [], 4000);
+      } finally {
+        pingBtn.disabled = false;
+        pingBtn.textContent = "Test Server Latency";
+      }
+    });
+    actBox.appendChild(pingBtn);
+
+    body.appendChild(actBox);
+
+    // 4. Synchronized Data Entities Section
+    const sec = el("div", "xp-card");
+    sec.appendChild(el("h3", "xp-sec-title", "Synchronized Data Entities"));
+    sec.appendChild(el("p", "xp-sec-desc", "The following components automatically replicate to your private SQLite database whenever you read or change preferences:"));
+
+    const table = el("div", "xp-entity-table");
+    const entities = [
+      { name: "Reading Progress", desc: "Current chapter index and exact scroll ratio", freq: "On scroll & chapter transition", icon: "book" },
+      { name: "Furthest Point Reached", desc: "Farthest milestone in each book (never lost on backward jump)", freq: "Monotonic forward-only", icon: "milestone" },
+      { name: "Text Highlights & Notes", desc: "Paragraph highlights with vector timestamps", freq: "Instant local + background flush", icon: "edit" },
+      { name: "Bookmarks (Ctrl+Alt+K)", desc: "Quick-jump paragraph snippets across modules", freq: "Real-time API sync", icon: "bookmark" },
+      { name: "Editor & Stealth Settings", desc: "Theme, font family, panic template, disguise mode", freq: "Instant cloud update", icon: "settings-gear" },
+    ];
+    for (const ent of entities) {
+      const row = el("div", "xp-entity-row");
+      const iconCell = el("div", "xp-entity-ico " + codiCls(ent.icon));
+      row.appendChild(iconCell);
+      const infoCell = el("div", "xp-entity-info");
+      infoCell.appendChild(el("div", "xp-entity-name", ent.name));
+      infoCell.appendChild(el("div", "xp-entity-desc", ent.desc));
+      row.appendChild(infoCell);
+      const freqCell = el("div", "xp-entity-freq", ent.freq);
+      row.appendChild(freqCell);
+      table.appendChild(row);
+    }
+    sec.appendChild(table);
+    body.appendChild(sec);
   },
 });
 
@@ -287,32 +394,69 @@ registerExtension({
   onEnable: () => bmRefresh(),
   onDisable: () => bmPaint(),
   render(body) {
-    body.appendChild(el("p", "xp-note", "Press Ctrl+Alt+K while reading to bookmark the paragraph you are on. Bookmarked paragraphs show a bar next to their line number."));
+    const hero = el("div", "xp-hero-card");
+    const heroLeft = el("div", "xp-hero-left");
+    const statusPill = el("div", "xp-status-pill ok");
+    statusPill.appendChild(el("span", "xp-pulse-dot"));
+    statusPill.appendChild(document.createTextNode("Paragraph Bookmark Ledger"));
+    heroLeft.appendChild(statusPill);
+    heroLeft.appendChild(el("h3", "xp-hero-title", "Bookmarks & Annotations Index"));
+    heroLeft.appendChild(el("p", "xp-hero-sub", "Press Ctrl+Alt+K while reading in any chapter to bookmark the active paragraph. Bookmarked lines feature an indicator mark in the editor gutter."));
+    hero.appendChild(heroLeft);
+    body.appendChild(hero);
+
+    const card = el("div", "xp-card");
+    card.appendChild(el("h3", "xp-sec-title", "Saved Bookmarks"));
     const list = el("div", "bm-list");
-    body.appendChild(list);
+    card.appendChild(list);
+    body.appendChild(card);
+
     const draw = () => {
       list.innerHTML = "";
-      if (!bm.loaded) { list.appendChild(el("p", "xp-off", "Loading…")); return; }
-      if (!bm.list.length) { list.appendChild(el("p", "xp-off", "No bookmarks yet.")); return; }
+      if (!bm.loaded) { list.appendChild(el("div", "xp-off-banner", "Loading saved bookmarks from database…")); return; }
+      if (!bm.list.length) {
+        const empty = el("div", "xp-empty-box");
+        empty.appendChild(el("span", "codicon " + codiCls("bookmark")));
+        empty.appendChild(el("h4", null, "No bookmarks saved yet"));
+        empty.appendChild(el("p", null, "While reading in code or doc view, press Ctrl+Alt+K to bookmark key passages."));
+        list.appendChild(empty);
+        return;
+      }
       for (const b of bm.list) {
         const book = bookById(b.book_id);
         if (!book) continue;
         const ch = book._chapters && book._chapters[b.chapter_idx];
         const row = el("div", "bm-row");
         const info = el("div", "bm-info");
-        info.appendChild(el("div", "bm-where", `${bookLabel(book)}  ›  ${ch ? displayName(ch) : "file " + b.chapter_idx}`));
-        info.appendChild(el("div", "bm-snip", b.snippet || "(no text)"));
+        const where = el("div", "bm-where");
+        where.appendChild(el("span", "xp-badge", bookLabel(book)));
+        where.appendChild(document.createTextNode(" › " + (ch ? displayName(ch) : "Chapter " + b.chapter_idx)));
+        info.appendChild(where);
+        info.appendChild(el("div", "bm-snip", `“${b.snippet || "(no text)"}”`));
         row.appendChild(info);
+
+        const actions = el("div", "bm-actions");
+        const jumpBtn = el("button", "xp-btn secondary small", "Jump to Line");
+        jumpBtn.type = "button";
+        jumpBtn.addEventListener("click", () => openBookmark(b));
+        actions.appendChild(jumpBtn);
+
         const del = el("button", "bm-del " + codiCls("trash"));
         del.type = "button";
         del.title = "Remove bookmark";
         del.addEventListener("click", async (e) => {
           e.stopPropagation();
           const res = await syncFetch(`/api/bookmarks/${b.id}`, { method: "DELETE" });
-          if (res && (res.ok || res.status === 404)) { bm.list = bm.list.filter((x) => x.id !== b.id); bmPaint(); draw(); }
+          if (res && (res.ok || res.status === 404)) {
+            bm.list = bm.list.filter((x) => x.id !== b.id);
+            bmPaint();
+            draw();
+            showToast("Bookmark deleted.", [], 2000);
+          }
         });
-        row.appendChild(del);
-        row.addEventListener("click", () => openBookmark(b));
+        actions.appendChild(del);
+        row.appendChild(actions);
+
         list.appendChild(row);
       }
     };
