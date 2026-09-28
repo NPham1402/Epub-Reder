@@ -63,7 +63,7 @@
           <div class="ab-icon ico" data-icon="git-branch" data-view="scm" title="Source Control"></div>
           <div class="ab-icon ico" data-icon="run" data-view="run" title="Run and Debug"></div>
           <div class="ab-icon ico" data-icon="extensions" data-view="extensions" title="Extensions"></div>
-          <div class="ab-icon ico" id="ab-chat" data-icon="sparkle" title="Claude Code (Ctrl+L)"></div>
+          <div class="ab-icon ico active" id="ab-chat" data-icon="sparkle" title="Claude Code (Ctrl+L)"></div>
           <div class="ab-spacer"></div>
           <div class="ab-icon ico" id="btn-account" data-icon="account" title="Account"></div>
         </div>
@@ -121,7 +121,7 @@
             <div class="tabs-header">
               <div class="tabs" id="tabs"></div>
               <div class="editor-actions">
-                <button type="button" id="btn-split-claude" class="ed-act-btn claude-act-star" title="Open Claude Code Tab (Ctrl+L)">
+                <button type="button" id="btn-split-claude" class="ed-act-btn claude-act-star active" title="Toggle Claude Code Tab (Ctrl+L)">
                   <svg class="claude-brand-asterisk" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14" stroke="#d97757" stroke-width="2.8" stroke-linecap="round"/>
                   </svg>
@@ -156,7 +156,7 @@
                 activity bar, sidebar chrome and status bar stay exactly as
                 they were), so switching to it looks like changing files, not
                 like the whole window changing shape. -->
-                <div class="panic-editor" id="panic-editor" hidden>
+                <div class="panic-editor" id="panic-editor" title="Double-click or press \ to exit Focus mode" ondblclick="if (typeof setPanic === 'function') setPanic(false)" hidden>
                   <pre id="panic-code" class="panic-code"></pre>
                   <div class="panic-terminal">
                     <div class="pt-head">PROBLEMS &nbsp; OUTPUT &nbsp; <b>TERMINAL</b> &nbsp; PORTS</div>
@@ -168,10 +168,10 @@
           </main>
 
           <!-- Split Sash / Divider -->
-          <div class="editor-sash" id="editor-sash" hidden></div>
+          <div class="editor-sash" id="editor-sash"></div>
 
           <!-- Secondary Editor Group: Claude Code Split Tab Group (Matching Image 3) -->
-          <aside class="editorgroup editorgroup-claude" id="ai-sidebar" hidden>
+          <aside class="editorgroup editorgroup-claude" id="ai-sidebar">
             <!-- Tabs Bar for Claude Code Pane matching Image 3 -->
             <div class="tabs-header claude-tabs-header">
               <div class="tabs claude-editor-tabs" id="claude-tabs-bar">

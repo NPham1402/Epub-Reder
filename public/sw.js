@@ -13,7 +13,7 @@
 //
 // Bump these when a shell asset changes shape in a way a revalidate might not
 // catch cleanly (rare — revalidate normally makes this unnecessary).
-const SHELL_CACHE = "epub-reader-shell-v8";
+const SHELL_CACHE = "epub-reader-shell-v9";
 const DATA_CACHE = "epub-reader-data-v1";
 const KEEP = new Set([SHELL_CACHE, DATA_CACHE]);
 

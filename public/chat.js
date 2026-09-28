@@ -17,7 +17,7 @@
 //    - Typing /read or /next streams real book text camouflaged inside live code changes and MSBuild logs
 
 const aiChat = {
-  isOpen: false,
+  isOpen: true,
   isGenerating: false,
   isMaximized: false,
   model: "sonnet-5",
@@ -183,10 +183,19 @@ const aiChat = {
       this.sendBtn.addEventListener("click", () => this.handleSubmit());
     }
 
-    // Escape key closes split tab
+    // Ctrl+Escape focuses / unfocuses Claude Code prompt input; Escape unfocuses
     document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && this.isOpen) {
-        this.toggle(false);
+      if (e.key === "Escape") {
+        if (e.ctrlKey) {
+          e.preventDefault();
+          if (document.activeElement === this.inputEl) {
+            this.inputEl.blur();
+          } else if (this.inputEl) {
+            this.inputEl.focus();
+          }
+        } else if (document.activeElement === this.inputEl) {
+          this.inputEl.blur();
+        }
       }
     });
 
@@ -214,6 +223,15 @@ const aiChat = {
 
     // Update context tag with active file
     this.updateContextPill();
+
+    // Default open state
+    this.isOpen = true;
+    if (this.container) this.container.hidden = false;
+    const sash = document.querySelector("#editor-sash");
+    if (sash) sash.hidden = false;
+    const starBtn = document.querySelector("#btn-split-claude");
+    if (starBtn) starBtn.classList.add("active");
+    if (abChat) abChat.classList.add("active");
 
     // Render active session (default: social)
     this.switchSession(this.activeSessionId);

@@ -1398,6 +1398,8 @@ let panicBuffer = "";
 let panicSaved = null;
 let panicTypeToken = 0;
 
+let panicClaudeWasOpen = false;
+
 function setPanic(on) {
   // blur and visibilitychange often both fire for one switch-away; a second
   // "on" would save the cover itself as the state to restore.
@@ -1413,6 +1415,10 @@ function setPanic(on) {
     const dh = $("#doc-host"); if (dh) dh.hidden = true;
     $("#ext-page").hidden = true;
     $("#panic-editor").hidden = false;
+    if (window.aiChat && window.aiChat.isOpen) {
+      panicClaudeWasOpen = true;
+      window.aiChat.toggle(false);
+    }
   } else {
     $("#panic-editor").hidden = true;
     if (panicSaved) { document.title = panicSaved.title; panicSaved = null; }
@@ -1425,6 +1431,10 @@ function setPanic(on) {
     $("#monaco-host").hidden = ext || !state.current || isDoc;
     const dh = $("#doc-host"); if (dh) dh.hidden = ext || !state.current || !isDoc;
     $("#welcome").hidden = ext || !!state.current;
+    if (panicClaudeWasOpen && window.aiChat && !window.aiChat.isOpen) {
+      window.aiChat.toggle(true);
+      panicClaudeWasOpen = false;
+    }
     if (reader.ed) reader.ed.layout();
     // Real render functions, not a saved HTML snapshot: innerHTML round-trips
     // lose the click handlers on tabs/tree rows, a snapshot wouldn't.
@@ -1531,6 +1541,11 @@ document.addEventListener("keydown", (e) => {
   // get past the cover screen shouldn't stumble onto the way out. Only
   // typing the configured unlock phrase (Settings) closes it.
   if (panicVisible) {
+    if (e.key === "\\" || e.key === "Escape") {
+      e.preventDefault();
+      setPanic(false);
+      return;
+    }
     e.preventDefault();
     e.stopPropagation();
     if (e.key.length === 1) {
