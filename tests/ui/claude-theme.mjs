@@ -17,6 +17,7 @@ try {
   await page.fill("#login-pass", PASSCODE);
   await page.click("#login-form button[type=submit]");
   await page.waitForSelector("#app:not([hidden])");
+  await page.click("#btn-split-claude"); // closed by default now; open it to check its theming
   await page.waitForSelector(".editorgroup-claude:not([hidden])");
 
   const dark = {

@@ -1073,6 +1073,14 @@ kbd {
 .editorgroup-claude.maximized {
   position: absolute; inset: 0; z-index: 30; width: 100% !important; flex: 1 1 100% !important;
 }
+/* Below this width the primary editor (260px) and the Claude pane (320px)
+   can't both fit; without this, opening the pane squeezes the real editor
+   out of view entirely — the app would show nothing but a chat window,
+   dropping the disguise completely. Real VS Code auto-hides its secondary
+   sidebar the same way on a narrow window. */
+@media (max-width: 900px) {
+  .editorgroup-claude:not(.maximized), .editor-sash { display: none !important; }
+}
 
 /* Tabs Header (VS Code tabs bar with actions on right) */
 .tabs-header {

@@ -17,7 +17,7 @@
 //    - Typing /read or /next streams real book text camouflaged inside live code changes and MSBuild logs
 
 const aiChat = {
-  isOpen: true,
+  isOpen: false,
   isGenerating: false,
   isMaximized: false,
   model: "sonnet-5",
@@ -224,16 +224,15 @@ const aiChat = {
     // Update context tag with active file
     this.updateContextPill();
 
-    // Default open state
-    this.isOpen = true;
-    if (this.container) this.container.hidden = false;
+    // Closed by default: open on demand (Ctrl+L / the star button / the
+    // activity bar icon) rather than always taking half the editor group —
+    // on a narrow window that left no room for the primary editor at all.
+    this.isOpen = false;
+    if (this.container) this.container.hidden = true;
     const sash = document.querySelector("#editor-sash");
-    if (sash) sash.hidden = false;
-    const starBtn = document.querySelector("#btn-split-claude");
-    if (starBtn) starBtn.classList.add("active");
-    if (abChat) abChat.classList.add("active");
+    if (sash) sash.hidden = true;
 
-    // Render active session (default: social)
+    // Pre-render the active session so opening it later is instant.
     this.switchSession(this.activeSessionId);
   },
 

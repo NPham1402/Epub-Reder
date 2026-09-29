@@ -121,7 +121,7 @@
             <div class="tabs-header">
               <div class="tabs" id="tabs"></div>
               <div class="editor-actions">
-                <button type="button" id="btn-split-claude" class="ed-act-btn claude-act-star active" title="Toggle Claude Code Tab (Ctrl+L)">
+                <button type="button" id="btn-split-claude" class="ed-act-btn claude-act-star" title="Toggle Claude Code Tab (Ctrl+L)">
                   <svg class="claude-brand-asterisk" width="14" height="14" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
                     <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14" stroke="#d97757" stroke-width="2.8" stroke-linecap="round"/>
                   </svg>
@@ -168,10 +168,10 @@
           </main>
 
           <!-- Split Sash / Divider -->
-          <div class="editor-sash" id="editor-sash"></div>
+          <div class="editor-sash" id="editor-sash" hidden></div>
 
           <!-- Secondary Editor Group: Claude Code Split Tab Group (Matching Image 3) -->
-          <aside class="editorgroup editorgroup-claude" id="ai-sidebar">
+          <aside class="editorgroup editorgroup-claude" id="ai-sidebar" hidden>
             <!-- Tabs Bar for Claude Code Pane matching Image 3 -->
             <div class="tabs-header claude-tabs-header">
               <div class="tabs claude-editor-tabs" id="claude-tabs-bar">
