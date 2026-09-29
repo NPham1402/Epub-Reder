@@ -1367,42 +1367,40 @@ kbd {
   display: flex; align-items: center; justify-content: space-between;
   margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--panel-border);
 }
-.claude-toolbar-left { display: flex; align-items: center; gap: 6px; }
+.claude-toolbar-left { display: flex; align-items: center; gap: 2px; }
 .claude-tool-icon-btn {
   background: none; border: none; color: var(--fg-dim); font-size: 14px; cursor: pointer;
   padding: 3px 6px; border-radius: 4px; display: inline-flex; align-items: center; justify-content: center;
 }
 .claude-tool-icon-btn:hover { background: var(--hover-soft); color: var(--fg-strong); }
+.claude-busy-dot { color: #d97757; cursor: default; }
+.claude-busy-dot:hover { background: none; color: #d97757; }
 .claude-ctx-pill {
   font-size: 11px; color: var(--fg-dim); display: inline-flex; align-items: center;
-  gap: 4px; padding: 2px 6px; border-radius: 4px; background: var(--hover-soft);
+  gap: 4px; padding: 2px 6px; margin-left: 4px; border-radius: 4px;
 }
 .claude-model-select {
-  background: var(--input-bg); border: 1px solid var(--input-border); color: var(--fg-strong);
-  font-size: 11.5px; font-weight: 500; padding: 3px 8px; border-radius: 6px;
-  cursor: pointer; outline: none; font-family: inherit;
+  background: none; border: none; color: var(--fg-dim); margin-top: 6px;
+  font-size: 11.5px; font-weight: 500; padding: 2px 0; border-radius: 6px;
+  cursor: pointer; outline: none; font-family: inherit; align-self: flex-start;
 }
 .claude-model-select option { background: var(--input-bg); color: var(--fg-strong); }
 .claude-file-ctx-tag {
-  display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px;
-  border-radius: 4px; background: var(--input-bg); border: 1px solid var(--input-border);
+  display: inline-flex; align-items: center; gap: 5px; padding: 3px 8px;
+  border-radius: 6px; background: var(--input-bg); border: 1px solid var(--input-border);
   color: var(--fg); font-size: 11px; font-family: Consolas, "Courier New", monospace;
-  cursor: default; user-select: none;
+  cursor: default; user-select: none; margin-bottom: 8px; align-self: flex-start;
 }
 .claude-file-ctx-tag .codicon { font-size: 12px; color: #f5c542; }
 .claude-tag-close { cursor: pointer; color: var(--fg-dim); margin-left: 2px; font-size: 12px; }
 .claude-tag-close:hover { color: var(--fg-strong); }
 
-.claude-toolbar-right { display: flex; align-items: center; gap: 8px; }
-.claude-auto-pill {
-  font-size: 11.5px; color: var(--fg-dim); background: var(--hover-soft);
-  padding: 3px 8px; border-radius: 5px; font-weight: 500;
-}
+.claude-toolbar-right { display: flex; align-items: center; gap: 6px; }
 .claude-send-pill {
-  width: 24px; height: 24px; border-radius: 50%; background: #783c2a; color: #e8d5cc;
+  width: 26px; height: 26px; border-radius: 7px; background: #d97757; color: #ffffff;
   border: none; cursor: pointer; display: flex; align-items: center; justify-content: center;
-  font-size: 12px; transition: all 0.15s ease; flex: 0 0 24px;
+  font-size: 13px; transition: all 0.15s ease; flex: 0 0 26px;
 }
 .claude-send-pill.active, .claude-send-pill:hover {
-  background: #d97757; color: #ffffff; transform: scale(1.05);
+  background: #e08765; transform: scale(1.05);
 }

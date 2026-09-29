@@ -234,23 +234,24 @@
                   <textarea id="ai-prompt-input" class="claude-prompt-input" rows="1" placeholder="ctrl esc to focus or unfocus Claude" spellcheck="false"></textarea>
                   <button type="button" class="claude-mic-btn codicon codicon-mic" title="Voice Dictation"></button>
                 </div>
+                <span class="claude-file-ctx-tag" id="ai-active-file-tag" title="Active File Context"><span class="codicon codicon-json"></span> canvas.json <span class="claude-tag-close">×</span></span>
                 <div class="claude-input-toolbar">
                   <div class="claude-toolbar-left">
                     <button type="button" class="claude-tool-icon-btn" title="Add File / Context (+)"><span class="codicon codicon-add"></span></button>
-                    <button type="button" class="claude-tool-icon-btn" title="Split Panel / Task Layout"><span class="codicon codicon-layout-panel"></span></button>
-                    <span class="claude-ctx-pill" id="ai-ctx-pill" title="Context Token Budget"><span>( )</span> 55m</span>
-                    <select id="ai-model-select" class="claude-model-select" title="Switch Model">
-                      <option value="sonnet-5" selected>Sonnet 5 High</option>
-                      <option value="opus-5-5">Opus 5.5</option>
-                      <option value="sonnet-3-7">Sonnet 3.7 High</option>
-                    </select>
-                    <span class="claude-file-ctx-tag" id="ai-active-file-tag" title="Active File Context"><span class="codicon codicon-json"></span> canvas.json <span class="claude-tag-close">×</span></span>
+                    <button type="button" class="claude-tool-icon-btn" title="Attach Code"><span class="codicon codicon-file-code"></span></button>
+                    <span class="claude-tool-icon-btn claude-busy-dot" title="Working"><span class="codicon codicon-loading codicon-modifier-spin"></span></span>
+                    <span class="claude-ctx-pill" id="ai-ctx-pill" title="Session length"><span class="codicon codicon-clock"></span> 55m</span>
                   </div>
                   <div class="claude-toolbar-right">
-                    <span class="claude-auto-pill" title="Autonomous Execution"><span class="codicon codicon-zap"></span> Auto</span>
+                    <span class="claude-tool-icon-btn" title="Autonomous Execution"><span class="codicon codicon-zap"></span></span>
                     <button id="ai-send-btn" class="claude-send-pill" title="Send (Enter)"><span class="codicon codicon-arrow-up"></span></button>
                   </div>
                 </div>
+                <select id="ai-model-select" class="claude-model-select" title="Switch Model">
+                  <option value="sonnet-5" selected>Sonnet 5 High</option>
+                  <option value="opus-5-5">Opus 5.5</option>
+                  <option value="sonnet-3-7">Sonnet 3.7 High</option>
+                </select>
               </div>
             </div>
           </aside>
