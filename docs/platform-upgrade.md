@@ -1,6 +1,6 @@
 # Kế hoạch nâng cấp nền tảng — EPUB Reader
 
-> Ngày: 2026-09-20 · Trạng thái: **15/23 mục backlog đang theo dõi đã xong và có test (EPR-02 đã bỏ theo quyết định 2026-09-21; EPR-22 xong, riêng 22.7 chờ Secret WebDAV; EPR-23, 24 mới thêm 2026-09-23 — cài thành app Windows + đọc offline); 2 mục cần chủ hệ thống (mục 9); 6 mục chưa làm (EPR-14, 15, 16, 19, 20, 21).** Sự cố upload ngày 2026-09-20 ở mục 12; kế hoạch tương thích với app vBook trên điện thoại ở mục 13.
+> Ngày: 2026-09-29 · Trạng thái: **17/23 mục backlog đang theo dõi đã xong và có test (EPR-02 đã bỏ theo quyết định 2026-09-21; EPR-22 xong, riêng 22.7 chờ Secret WebDAV; EPR-23, 24 thêm 2026-09-23 — cài thành app Windows + đọc offline; EPR-07 xong 2026-09-29 — tự ghim tag lên GitOps); 1 mục cần chủ hệ thống (mục 9); 6 mục chưa làm (EPR-14, 15, 16, 19, 20, 21).** Sự cố upload ngày 2026-09-20 ở mục 12; kế hoạch tương thích với app vBook trên điện thoại ở mục 13.
 >
 > Phương pháp lấy từ `Worker_Zalo/docs/platform-upgrade/` (baseline có bằng chứng → ưu tiên P0–P3 → quyết định cần chốt → lộ trình có cổng thoát → backlog có ID → chỉ số nghiệm thu → sổ rủi ro), thu nhỏ cho dự án một người: một file thay vì tám.
 
@@ -47,7 +47,7 @@ Trạng thái: ✅ xong + có test · ⏳ cần chủ hệ thống · 🔲 chưa
 | EPR-04 | P1 | CronJob backup hằng đêm (snapshot SQLite `VACUUM INTO` + mirror `objects/`, giữ 14 bản) | M | ✅ | **Diễn tập khôi phục tự động**: backup → xoá sạch dữ liệu → restore → mọi chương khớp từng byte. **Đã chạy trên volume thật của cụm (2026-09-20):** backup 3 file/38 MB; khôi phục vào thư mục tạm: `integrity_check` ok, 1 sách/2389 chương/3 file, 4 giây |
 | EPR-05 | P1 | Backup **off-site** | M | ⏳ | Bản sao nằm ngoài node/đĩa đang chạy app và đã khôi phục thử từ đó |
 | EPR-06 | P1 | Test + cổng CI: typecheck + 31 test; đỏ thì không đẩy image | M | ✅ | PR/push chạy `npm test`; job build phụ thuộc job test |
-| EPR-07 | P1 | Tự ghim tag `:<sha>` vào manifest để cụm tự cập nhật | S | ⏳ | Cần secret `CI_CD_PLATFORM_TOKEN`; xanh → commit vào `ci-cd-platform` → ArgoCD rollout |
+| EPR-07 | P1 | Tự ghim tag `:<sha>` vào manifest để cụm tự cập nhật | S | ✅ | Secret `CI_CD_PLATFORM_TOKEN` đã thêm (2026-09-29); job `pin-image` tự commit "epub-reader: image ..." vào `ci-cd-platform`, xác nhận bằng một commit thử (`499a934` → `537a9ba`) |
 | EPR-08 | P1 | Khoá ingest theo từng sách (409 khi trùng) | S | ✅ | 4 request song song → có 409, dữ liệu vẫn đúng từng byte |
 | EPR-09 | P1 | Dọn upload dở sau 24 giờ, **không bao giờ** dọn sách đang reindex | M | ✅ | Test khởi động lại với ngưỡng 0: upload dở bị xoá cả file, sách đang reindex còn nguyên và hoàn tất được |
 | EPR-10 | P1 | Chặn zip bomb (giới hạn dung lượng giải nén trước khi giải nén) | S | ✅ | Chương khai 40 MB → 422 "too large", server vẫn khoẻ, xoá được |
@@ -93,7 +93,7 @@ Lưu ý: diễn tập trên cụm mới kiểm tra `integrity_check`, số sách
 
 **Definition of Done cho một thay đổi:** có test tái hiện lỗi/tính năng; `npm run typecheck` và `npm test` xanh; nếu đụng migration thì dựng được DB mới từ đầu; nếu đụng luồng UI thì chạy thử trong trình duyệt thật, không chỉ `node --check`.
 
-**Release gate:** PR → typecheck + test. `main` → thêm build arm64. Sau khi có `CI_CD_PLATFORM_TOKEN` → tự ghim tag. Việc còn thiếu là gate staging: hiện chưa có môi trường thử trên cụm.
+**Release gate:** PR → typecheck + test. `main` → thêm build arm64 → tự ghim tag vào `ci-cd-platform` → ArgoCD rollout (EPR-07, xong 2026-09-29). Việc còn thiếu là gate staging: hiện chưa có môi trường thử trên cụm.
 
 ## 8. Sổ rủi ro và điều kiện dừng mọi việc khác
 
@@ -109,7 +109,7 @@ Lưu ý: diễn tập trên cụm mới kiểm tra `integrity_check`, số sách
 
 ## 9. Việc cần chủ hệ thống làm
 
-1. **EPR-07** — tạo fine-grained PAT (Contents: read & write trên `Npham140201/ci-cd-platform`), lưu thành secret `CI_CD_PLATFORM_TOKEN` của repo EPUB Reader.
+1. ~~**EPR-07**~~ — xong 2026-09-29.
 2. **EPR-05** — chọn nơi đặt bản sao off-site (ví dụ kéo `/backup` sang node khác qua Tailscale bằng `rsync`, hoặc đẩy lên một bucket) rồi tôi viết bước đó.
 
 ## 10. Runbook khôi phục
@@ -126,12 +126,11 @@ Toàn bộ quy trình này chạy tự động trong `tests/backup.test.ts` (bac
 
 ## 11. Việc còn lại — đã ghi, chưa làm (tạm hoãn theo yêu cầu 2026-09-20)
 
-Thứ tự đề xuất khi quay lại: EPR-05 → 07 → 14 → 15 (EPR-02 đã bỏ). EPR-16 chỉ khi quyết định 2 đổi. Nhóm tương thích vBook (mục 13) làm theo thứ tự EPR-19 → 20 → 21; EPR-22 (mục 14) độc lập, trừ hai việc dùng chung bộ ghép EPUB với EPR-19.
+Thứ tự đề xuất khi quay lại: EPR-05 → 14 → 15 (EPR-02 đã bỏ, EPR-07 xong). EPR-16 chỉ khi quyết định 2 đổi. Nhóm tương thích vBook (mục 13) làm theo thứ tự EPR-19 → 20 → 21; EPR-22 (mục 14) độc lập, trừ hai việc dùng chung bộ ghép EPUB với EPR-19.
 
 | ID | Ai làm | Cần gì để bắt đầu | Việc cụ thể |
 |---|---|---|---|
 | EPR-05 | Cả hai | **Chọn nơi đặt bản sao**: (a) `rsync` `/backup` sang node khác qua Tailscale (rẻ nhất, dùng hạ tầng có sẵn, cần đường SSH/khoá giữa hai node), hoặc (b) bucket (R2 / Oracle Object Storage, cần khoá truy cập), hoặc (c) một máy chủ WebDAV bạn có (EPR-22.7, mục 14) | Viết bước sao chép ra ngoài node vào CronJob; sau đó **diễn tập khôi phục từ bản sao off-site** (chưa khôi phục thử được thì chưa tính là xong) |
-| EPR-07 | Chủ hệ thống | Tạo PAT fine-grained: Contents read & write trên `Npham140201/ci-cd-platform` | Lưu thành secret `CI_CD_PLATFORM_TOKEN` của repo EPUB Reader; job `pin-image` đã viết sẵn sẽ tự chạy. Kiểm tra: push một commit → xuất hiện commit "epub-reader: image ..." trong `ci-cd-platform` |
 | EPR-14 | Tôi | **Chọn hệ thống cảnh báo** (Beszel / eBOSS_LOG / Zalo). App đã ghi log `LOW DISK` khi dưới 10% và `/healthz` trả `disk.free_pct`; đĩa của PVC là đĩa của node, và Beszel đã theo dõi đĩa host nên có thể chỉ cần đặt ngưỡng ở đó | Nối log/số liệu vào cảnh báo, thử bằng cách hạ ngưỡng tạm để thấy cảnh báo bắn |
 | EPR-15 | Tôi | **Chốt quyết định 1**: không quay lại Cloudflare. Nên đợi vài tuần chạy ổn trên k3s rồi mới bỏ vì không quay lại được | Ingest một request; xoá staging/multipart trong `src/index.ts`; xoá `deploy.yml`, `scripts/upload-book.ts`, `wrangler.jsonc` và phụ thuộc `wrangler`; giữ test xanh |
 | EPR-16 | Tôi | Chỉ khi bạn muốn nhiều người dùng (tìm kiếm toàn văn giờ là EPR-22.5) | Thêm `user_id` vào `books`/`progress` từ đầu, không vá |
