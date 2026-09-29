@@ -1077,9 +1077,11 @@ kbd {
    can't both fit; without this, opening the pane squeezes the real editor
    out of view entirely — the app would show nothing but a chat window,
    dropping the disguise completely. Real VS Code auto-hides its secondary
-   sidebar the same way on a narrow window. */
+   sidebar the same way on a narrow window. No exception for .maximized:
+   a narrow window is exactly the case where a fullscreen chat pane would
+   erase every trace of the disguise, so it's hidden here too. */
 @media (max-width: 900px) {
-  .editorgroup-claude:not(.maximized), .editor-sash { display: none !important; }
+  .editorgroup-claude, .editor-sash { display: none !important; }
 }
 
 /* Tabs Header (VS Code tabs bar with actions on right) */
