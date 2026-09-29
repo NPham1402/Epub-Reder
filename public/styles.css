@@ -1130,13 +1130,37 @@ kbd {
 .claude-sub-header {
   height: 32px; display: flex; align-items: center; justify-content: space-between;
   padding: 0 16px; background: var(--sidebar-bg); border-bottom: 1px solid var(--panel-border);
-  flex-shrink: 0; user-select: none;
+  flex-shrink: 0; user-select: none; position: relative;
 }
 .claude-sub-title {
   font-size: 12.5px; font-weight: 600; color: var(--fg-strong); max-width: 480px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .claude-sub-actions { display: flex; align-items: center; gap: 6px; }
+
+/* "Recent Sessions" dropdown */
+.claude-history-menu {
+  position: absolute; top: 100%; right: 8px; margin-top: 4px; z-index: 25;
+  min-width: 220px; max-width: 320px; max-height: 320px; overflow-y: auto;
+  background: var(--modal-bg); border: 1px solid var(--widget-border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35); padding: 4px;
+}
+.claude-history-item {
+  display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 5px;
+  cursor: pointer; color: var(--fg); font-size: 12.5px;
+}
+.claude-history-item .codicon:first-child { color: var(--fg-dim); font-size: 14px; flex-shrink: 0; }
+.claude-history-item:hover { background: var(--hover-soft); }
+.claude-history-item.active { background: var(--hover); color: var(--fg-strong); }
+.claude-history-item-title {
+  flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.claude-history-item-del {
+  opacity: 0; flex-shrink: 0; color: var(--fg-dim); border-radius: 4px; padding: 2px;
+}
+.claude-history-item:hover .claude-history-item-del { opacity: 0.7; }
+.claude-history-item-del:hover { opacity: 1 !important; color: var(--err); }
+.claude-history-empty { padding: 10px 8px; color: var(--fg-dim); font-size: 12.5px; text-align: center; }
 .claude-nav-btn {
   background: none; border: none; color: var(--fg-dim); cursor: pointer;
   padding: 4px 6px; border-radius: 4px; font-size: 14px; display: inline-flex;

@@ -16,6 +16,8 @@
 // 4. Stealth EPUB Reader:
 //    - Typing /read or /next streams real book text camouflaged inside live code changes and MSBuild logs
 
+const AI_CHAT_STORAGE_KEY = "devdocs.aiChatHistory";
+
 const aiChat = {
   isOpen: false,
   isGenerating: false,
@@ -232,8 +234,114 @@ const aiChat = {
     const sash = document.querySelector("#editor-sash");
     if (sash) sash.hidden = true;
 
+    // Sessions/messages typed in previous visits, restored before the first
+    // render — without this, a reload silently wiped every conversation.
+    this.loadPersisted();
+
+    // "Recent Sessions": every session that ever existed, not just the
+    // three tabs currently open, the way Claude Code's own history does.
+    const historyBtn = document.querySelector("#ai-history-btn");
+    if (historyBtn) historyBtn.addEventListener("click", (e) => { e.stopPropagation(); this.toggleHistoryMenu(); });
+    document.addEventListener("click", (e) => {
+      const menu = document.querySelector("#ai-history-menu");
+      if (menu && !menu.hidden && !menu.contains(e.target) && e.target !== historyBtn) this.closeHistoryMenu();
+    });
+
     // Pre-render the active session so opening it later is instant.
     this.switchSession(this.activeSessionId);
+  },
+
+  // ---- Persistence: chat history survives a reload, like the real app ----
+  loadPersisted() {
+    let saved;
+    try { saved = JSON.parse(localStorage.getItem(AI_CHAT_STORAGE_KEY) || "null"); } catch { saved = null; }
+    if (!saved || !saved.sessions) return;
+    for (const [id, s] of Object.entries(saved.sessions)) {
+      if (this.sessions[id]) {
+        this.sessions[id].messages = s.messages || [];
+        this.sessions[id].title = s.title || this.sessions[id].title;
+        this.sessions[id].tabLabel = s.tabLabel || this.sessions[id].tabLabel;
+      } else {
+        this.sessions[id] = { id, title: s.title || "Untitled", tabLabel: s.tabLabel || "Claude Code", messages: s.messages || [] };
+      }
+    }
+    if (saved.activeSessionId && this.sessions[saved.activeSessionId]) this.activeSessionId = saved.activeSessionId;
+    // Only the sessions that were actually open as tabs get a tab back —
+    // the rest stay reachable from Recent Sessions, same as a real "closed
+    // tab" would.
+    for (const id of saved.openTabs || []) if (this.sessions[id]) this.ensureTab(id);
+  },
+  persist() {
+    const openTabs = Array.from(document.querySelectorAll("#claude-tabs-bar .claude-tab")).map((t) => t.dataset.session);
+    try {
+      localStorage.setItem(AI_CHAT_STORAGE_KEY, JSON.stringify({ sessions: this.sessions, activeSessionId: this.activeSessionId, openTabs }));
+    } catch { /* storage full/unavailable: history just won't survive this reload */ }
+  },
+
+  // Builds a tab for a session that already exists in this.sessions but has
+  // no tab on screen right now (reused by history restore and by picking an
+  // old session from Recent Sessions).
+  ensureTab(sessionId) {
+    const tabsBar = document.querySelector("#claude-tabs-bar");
+    if (!tabsBar || tabsBar.querySelector(`.claude-tab[data-session="${sessionId}"]`)) return;
+    const session = this.sessions[sessionId];
+    if (!session) return;
+    const tabEl = document.createElement("div");
+    tabEl.className = "tab claude-tab";
+    tabEl.dataset.session = sessionId;
+    tabEl.title = session.title;
+    tabEl.innerHTML = `
+      <span class="claude-tab-icon">
+        <svg class="claude-brand-asterisk" width="13" height="13" viewBox="0 0 24 24" fill="none">
+          <path d="M12 2v20M2 12h20M4.93 4.93l14.14 14.14M4.93 19.07l14.14-14.14" stroke="#d97757" stroke-width="2.8" stroke-linecap="round"/>
+        </svg>
+      </span>
+      <span class="tab-name">${this.escapeHtml(session.tabLabel)}</span>
+      <span class="tab-close codicon codicon-close" data-close="${sessionId}"></span>
+    `;
+    tabsBar.appendChild(tabEl);
+  },
+
+  toggleHistoryMenu() {
+    const existing = document.querySelector("#ai-history-menu");
+    if (existing) { this.closeHistoryMenu(); return; }
+    const btn = document.querySelector("#ai-history-btn");
+    const menu = document.createElement("div");
+    menu.id = "ai-history-menu";
+    menu.className = "claude-history-menu";
+    const entries = Object.values(this.sessions);
+    menu.innerHTML = entries.length
+      ? entries.map((s) => `
+          <div class="claude-history-item${s.id === this.activeSessionId ? " active" : ""}" data-session="${s.id}">
+            <span class="codicon codicon-comment-discussion"></span>
+            <span class="claude-history-item-title">${this.escapeHtml(s.title)}</span>
+            <span class="claude-history-item-del codicon codicon-trash" data-del="${s.id}" title="Delete"></span>
+          </div>
+        `).join("")
+      : `<div class="claude-history-empty">No sessions yet</div>`;
+    menu.addEventListener("click", (e) => {
+      const del = e.target.closest("[data-del]");
+      if (del) { e.stopPropagation(); this.deleteSession(del.dataset.del); this.closeHistoryMenu(); this.toggleHistoryMenu(); return; }
+      const item = e.target.closest(".claude-history-item");
+      if (item) {
+        this.ensureTab(item.dataset.session);
+        this.switchSession(item.dataset.session);
+        this.closeHistoryMenu();
+      }
+    });
+    btn.after(menu);
+  },
+  closeHistoryMenu() {
+    const menu = document.querySelector("#ai-history-menu");
+    if (menu) menu.remove();
+  },
+  deleteSession(sessionId) {
+    if (Object.keys(this.sessions).length <= 1) return; // always keep at least one
+    delete this.sessions[sessionId];
+    const tabEl = document.querySelector(`.claude-tab[data-session="${sessionId}"]`);
+    if (tabEl) tabEl.remove();
+    if (this.activeSessionId === sessionId) this.switchSession(Object.keys(this.sessions)[0]);
+    this.persist();
   },
 
   initSashResizer() {
@@ -330,6 +438,7 @@ const aiChat = {
 
     this.renderSession(sessionId);
     if (this.inputEl) this.inputEl.focus();
+    this.persist();
   },
 
   createNewSession() {
@@ -363,20 +472,21 @@ const aiChat = {
     this.switchSession(id);
   },
 
+  // Closes the TAB, like clicking the × on a real editor tab — the session
+  // itself (its messages) stays in history, reachable from Recent Sessions,
+  // exactly like a real closed chat isn't actually deleted.
   closeSession(sessionId) {
-    delete this.sessions[sessionId];
     const tabsBar = document.querySelector("#claude-tabs-bar");
-    if (tabsBar) {
-      const tabEl = tabsBar.querySelector(`.claude-tab[data-session="${sessionId}"]`);
-      if (tabEl) tabEl.remove();
-    }
+    const tabEl = tabsBar && tabsBar.querySelector(`.claude-tab[data-session="${sessionId}"]`);
+    if (tabEl) tabEl.remove();
 
-    const remaining = Object.keys(this.sessions);
-    if (remaining.length === 0) {
+    const remainingTabs = tabsBar ? Array.from(tabsBar.querySelectorAll(".claude-tab")).map((t) => t.dataset.session) : [];
+    if (remainingTabs.length === 0) {
       this.toggle(false);
     } else if (this.activeSessionId === sessionId) {
-      this.switchSession(remaining[remaining.length - 1]);
+      this.switchSession(remainingTabs[remainingTabs.length - 1]);
     }
+    this.persist();
   },
 
   renderSession(sessionId) {
@@ -458,9 +568,15 @@ const aiChat = {
       });
     }
 
+    // A saved reply from sendPrompt() carries its final answer in
+    // msg.content (streamed live the first time, plain on reload) — without
+    // this, restoring history showed the "thinking" step but not the answer.
+    const bodyHtml = msg.content ? `<div class="claude-final-prose">${this.renderMarkdown(msg.content)}</div>` : "";
+
     aiNode.innerHTML = `
       <div class="claude-assistant-wrap">
         ${toolsHtml}
+        ${bodyHtml}
       </div>
     `;
 
@@ -552,6 +668,7 @@ const aiChat = {
       role: "user",
       content: prompt
     });
+    this.persist();
 
     const userRow = document.createElement("div");
     userRow.className = "ai-msg-row ai-msg-user";
@@ -696,6 +813,7 @@ const aiChat = {
           thoughtText: replyData.thought,
           thoughtTime: replyData.thinkTime
         });
+        this.persist();
       }
     }, 20);
   },
