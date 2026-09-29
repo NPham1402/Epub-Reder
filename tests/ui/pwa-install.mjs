@@ -100,7 +100,7 @@ try {
   await page.click('.ab-icon[data-view="extensions"]');
   await page.locator("#ext-list .ext-item", { hasText: "Color Themes" }).click();
   const before = await page.getAttribute('meta[name="theme-color"]', "content");
-  await page.locator(".theme-row", { hasText: "Light+" }).click();
+  await page.locator(".xp-theme-card", { hasText: "Light+" }).click();
   const after = await page.getAttribute('meta[name="theme-color"]', "content");
   check("theme-color follows the color theme", after !== before, `${before} -> ${after}`);
 } catch (e) {

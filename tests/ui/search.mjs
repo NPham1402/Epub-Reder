@@ -93,12 +93,12 @@ try {
 
   // Second book, not indexed while the extension is off
   await showExt("Global Search");
-  await page.click(".xp-btn:has-text('Disable')");
+  await page.click(".xp-btn-toggle:has-text('Disable')");
   await importFile(pathB);
   await page.waitForTimeout(1500);
   const s = await status();
   check("with the extension off, new uploads are not indexed", s.books.length === 2 && s.books.some((b) => b.indexed === 0), JSON.stringify(s.books.map((b) => b.indexed + "/" + b.total)));
-  await page.click(".xp-btn:has-text('Enable')");
+  await page.click(".xp-btn-toggle:has-text('Enable')");
   await page.waitForSelector(".gs-status .xp-btn");
   check("the page offers to index what is missing", (await page.textContent(".gs-status")).includes("1 of 2 modules indexed"), await page.textContent(".gs-status"));
   await page.fill(".gs-input", "trach nhat");

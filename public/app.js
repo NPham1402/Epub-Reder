@@ -1408,8 +1408,13 @@ function setPanic(on) {
   panicBuffer = "";
   panicTypeToken++; // invalidate any in-flight terminal typing
   if (on) {
-    panicSaved = { title: document.title };
+    // Whichever side bar view was open (Extensions, Search...) stays real
+    // otherwise: its list of installed extensions ("Library", "Bookmarks",
+    // "Sync & Backup"...) gives the whole thing away next to a fake code file.
+    const sideView = ["explorer", "search", "scm", "run", "extensions"].find((id) => { const v = $("#view-" + id); return v && !v.hidden; }) || "explorer";
+    panicSaved = { title: document.title, sideView };
     renderPanic();
+    if (typeof setSideView === "function" && sideView !== "explorer") setSideView("explorer");
     $("#welcome").hidden = true;
     $("#monaco-host").hidden = true;
     const dh = $("#doc-host"); if (dh) dh.hidden = true;
@@ -1421,7 +1426,9 @@ function setPanic(on) {
     }
   } else {
     $("#panic-editor").hidden = true;
+    const savedSideView = panicSaved && panicSaved.sideView;
     if (panicSaved) { document.title = panicSaved.title; panicSaved = null; }
+    if (typeof setSideView === "function" && savedSideView && savedSideView !== "explorer") setSideView(savedSideView);
     // Which pane belongs on screen is worked out from the current state, not
     // from a snapshot: a chapter can finish loading, or the tab change, while
     // the cover is up, and a stale snapshot would bring back an empty editor.

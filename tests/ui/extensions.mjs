@@ -91,10 +91,10 @@ try {
   // ---- Focus Timer ----
   await showExtView();
   await page.locator("#ext-list .ext-item", { hasText: "Focus Timer" }).click();
-  await page.waitForSelector(".xp-off");
-  check("Focus Timer is off by default and says so", (await page.textContent(".xp-off")).includes("disabled"));
-  await page.click(".xp-btn:has-text('Enable')");
-  await page.waitForSelector(".ft-row");
+  await page.waitForSelector(".xp-off-banner");
+  check("Focus Timer is off by default and says so", (await page.textContent(".xp-off-banner")).includes("disabled"));
+  await page.click(".xp-btn-toggle:has-text('Enable')");
+  await page.waitForSelector(".xp-btn-toggle:has-text('Disable')");
   await page.locator("#tabs .tab").filter({ hasNotText: "Extension" }).first().click();
   await page.waitForSelector(".monaco-editor .view-line");
   await page.waitForSelector("#st-timer:not([hidden])", { timeout: 5000 });
@@ -102,7 +102,7 @@ try {
   check("enabled: the status bar shows time left", /min left/.test(left), left.trim());
   await page.screenshot({ path: `${SHOTS}/A-3-timer.png` });
   await page.locator("#tabs .tab", { hasText: "Focus Timer" }).click();
-  await page.click("text=Show a sample reminder");
+  await page.click("text=Preview Notification Toast");
   check("a sample reminder appears as a notification", (await page.locator(".toast").count()) === 1);
   await page.keyboard.press("\\");
   await page.waitForSelector("#panic-editor:not([hidden])");
@@ -111,14 +111,14 @@ try {
   await page.waitForSelector("#panic-editor", { state: "hidden" });
   check("and they come back after unlocking", await vis("#toasts"));
   await page.click(".toast .toast-btn");
-  await page.click(".xp-btn:has-text('Disable')");
+  await page.click(".xp-btn-toggle:has-text('Disable')");
   check("disabling removes every trace from the status bar", (await page.locator("#st-timer").count()) === 0);
 
   // ---- Color Themes ----
   await showExtView();
   await page.locator("#ext-list .ext-item", { hasText: "Color Themes" }).click();
-  await page.waitForSelector(".theme-row");
-  await page.locator(".theme-row", { hasText: "Light+" }).click();
+  await page.waitForSelector(".xp-theme-card");
+  await page.locator(".xp-theme-card", { hasText: "Light+" }).click();
   check("Light+ sets the theme attribute", (await page.evaluate(() => document.documentElement.dataset.theme)) === "light");
   check("and the window really turns light", (await cssBg("body")) === "rgb(255, 255, 255)", await cssBg("body"));
   await page.screenshot({ path: `${SHOTS}/A-4-light-theme-page.png` });
@@ -138,17 +138,17 @@ try {
   for (const [name, bg] of [["Monokai", "rgb(39, 40, 34)"], ["AMOLED", "rgb(0, 0, 0)"]]) {
     await showExtView();
     await page.locator("#ext-list .ext-item", { hasText: "Color Themes" }).click();
-    await page.locator(".theme-row", { hasText: name }).click();
+    await page.locator(".xp-theme-card", { hasText: name }).click();
     check(`${name} theme applies`, (await cssBg("body")) === bg, await cssBg("body"));
   }
   await page.screenshot({ path: `${SHOTS}/A-7-amoled.png` });
-  await page.locator(".theme-row", { hasText: "Dark+" }).click();
+  await page.locator(".xp-theme-card", { hasText: "Dark+" }).click();
   check("Dark+ removes the theme attribute (the original look)", (await page.evaluate(() => document.documentElement.dataset.theme)) === undefined);
-  await page.locator(".theme-row", { hasText: "Light+" }).click();
-  await page.click(".xp-btn:has-text('Disable')");
+  await page.locator(".xp-theme-card", { hasText: "Light+" }).click();
+  await page.click(".xp-btn-toggle:has-text('Disable')");
   check("disabling Color Themes puts the original look back", (await page.evaluate(() => document.documentElement.dataset.theme)) === undefined);
-  await page.click(".xp-btn:has-text('Enable')");
-  await page.locator(".theme-row", { hasText: "Dark+" }).click();
+  await page.click(".xp-btn-toggle:has-text('Enable')");
+  await page.locator(".xp-theme-card", { hasText: "Dark+" }).click();
 
   // ---- Tabs survive a reload ----
   await page.locator("#tabs .tab", { hasText: "Extension: Library" }).click();

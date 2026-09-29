@@ -70,6 +70,31 @@ try {
   check("real tab title and language come back", !after.title.includes("eBOSS") && after.lang !== "C#", `${after.title} | ${after.lang}`);
   await page.locator("#tabs .tab").first().click();
   check("tabs are clickable again", true);
+
+  // Whichever side bar view was open (not just the Explorer tree) must not
+  // leak real, book-revealing content (extension names like "Library",
+  // "Bookmarks") while the cover is up.
+  await page.click('.ab-icon[data-view="extensions"]');
+  await page.waitForSelector("#ext-list .ext-item", { timeout: 5000 });
+  const realExtList = (await page.locator("#ext-list").textContent()).trim();
+  await page.evaluate(() => setPanic(true));
+  await page.waitForSelector("#panic-editor:not([hidden])");
+  const coveredSide = await page.evaluate(() => ({
+    extensionsViewHidden: document.querySelector("#view-extensions").hidden,
+    explorerViewHidden: document.querySelector("#view-explorer").hidden,
+    visibleText: document.querySelector("#sidebar").innerText,
+  }));
+  check("the real extensions list is hidden while covered", coveredSide.extensionsViewHidden === true, JSON.stringify(coveredSide.extensionsViewHidden));
+  check("the fake Explorer view is shown instead", coveredSide.explorerViewHidden === false);
+  check("no real extension name is visible in the side bar while covered", !/Library|Bookmarks|Sync & Backup|Activity Insights/.test(coveredSide.visibleText), coveredSide.visibleText.replace(/\s+/g, " ").trim());
+  await page.evaluate(() => setPanic(false));
+  await page.waitForSelector("#panic-editor", { state: "hidden" });
+  const restoredSide = await page.evaluate(() => ({
+    extensionsViewHidden: document.querySelector("#view-extensions").hidden,
+    list: document.querySelector("#ext-list").textContent.trim(),
+  }));
+  check("the Extensions view (not Explorer) comes back after unlocking", restoredSide.extensionsViewHidden === false);
+  check("with the real list intact", restoredSide.list === realExtList, restoredSide.list.slice(0, 40));
 } catch (e) {
   failed++;
   console.log("FAIL  exception: " + e);

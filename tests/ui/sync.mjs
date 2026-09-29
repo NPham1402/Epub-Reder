@@ -65,7 +65,7 @@ try {
   // settings: font size + theme
   await A.keyboard.press("Control+="); await A.keyboard.press("Control+=");
   await showExt(A, "Color Themes");
-  await A.locator(".theme-row", { hasText: "Monokai" }).click();
+  await A.locator(".xp-theme-card", { hasText: "Monokai" }).click();
   await A.waitForTimeout(2500);
   const remoteSettings = (await apiGet(A, "/api/settings")).settings;
   check("settings reached the server", remoteSettings.theme?.value === "monokai" && remoteSettings.fontSize?.value === 17, `${remoteSettings.theme?.value}, ${remoteSettings.fontSize?.value}`);
@@ -82,7 +82,7 @@ try {
 
   // a change on B reaches A
   await showExt(B, "Color Themes");
-  await B.locator(".theme-row", { hasText: "Light+" }).click();
+  await B.locator(".xp-theme-card", { hasText: "Light+" }).click();
   await B.waitForTimeout(2500);
   await A.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
   await A.waitForTimeout(1500);
@@ -118,9 +118,9 @@ try {
 
   // ------------- bookmarks -------------
   await showExt(A, "Bookmarks");
-  await A.waitForSelector(".xp-off");
-  check("Bookmarks is off by default", (await A.textContent(".xp-off")).includes("disabled"));
-  await A.click(".xp-btn:has-text('Enable')");
+  await A.waitForSelector(".xp-off-banner");
+  check("Bookmarks is off by default", (await A.textContent(".xp-off-banner")).includes("disabled"));
+  await A.click(".xp-btn-toggle:has-text('Enable')");
   await A.waitForSelector(".bm-list");
   await A.locator("#tabs .tab").filter({ hasNotText: "Extension" }).first().click().catch(() => {});
   await openChapter(A, 2);
@@ -140,7 +140,7 @@ try {
 
   // B: enable the extension, see the bookmark, jump to it
   await showExt(B, "Bookmarks");
-  await B.click(".xp-btn:has-text('Enable')");
+  await B.click(".xp-btn-toggle:has-text('Enable')");
   await B.waitForSelector(".bm-row");
   check("B sees A's bookmark", (await B.locator(".bm-row").count()) === 1);
   await B.screenshot({ path: `${SHOTS}/B-3-bookmarks-page.png` });

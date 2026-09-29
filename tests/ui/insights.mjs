@@ -76,7 +76,7 @@ try {
   await page.screenshot({ path: `${SHOTS}/C-1-insights.png` });
 
   // Disabling stops the recording.
-  await page.click(".xp-btn:has-text('Disable')");
+  await page.click(".xp-btn-toggle:has-text('Disable')");
   const after = await pendingSeconds();
   await page.locator("#tabs .tab").filter({ hasNotText: "Extension" }).first().click();
   for (let i = 0; i < 3; i++) { await page.mouse.move(600 + i, 340); await page.waitForTimeout(1000); }

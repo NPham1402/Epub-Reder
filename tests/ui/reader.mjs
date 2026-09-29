@@ -94,7 +94,7 @@ try {
   const prog = await progress(book);
   check("scroll position is saved as progress", prog && prog.chapter_idx === 2 && prog.scroll_ratio > 0, JSON.stringify(prog));
 
-  const tabName = () => page.locator(".tab.active .tab-name").textContent();
+  const tabName = () => page.locator("#tabs .tab.active .tab-name").textContent();
   const t0 = await tabName();
   await page.keyboard.press("d"); await page.waitForTimeout(700);
   const t1 = await tabName();
@@ -127,7 +127,7 @@ try {
   await page.click('[data-close="settings"]');
   await page.waitForTimeout(600);
   const camoText = await page.evaluate(() => window.monaco.editor.getEditors()[0].getModel().getValue().split("\n").find((l) => l.includes("c2p")) || "");
-  check("camo mode prefixes prose with //", camoText.startsWith("// "), camoText.slice(0, 20));
+  check("camo mode wraps prose in a docstring", camoText.trim().startsWith("* @summary"), camoText.slice(0, 20));
   await page.click("#btn-settings");
   await page.uncheck("#opt-camo");
   await page.click('[data-close="settings"]');
