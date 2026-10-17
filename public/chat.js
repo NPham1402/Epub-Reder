@@ -50,7 +50,7 @@ const aiChat = {
           toolSteps: [
             {
               type: "read",
-              file: "D:\\eBOSS Projects\\eBOSS_Company\\EDT\\eBOSS.Modules.Signature.Api\\WorkflowEngine.cs",
+              file: "D:\\Projects\\eBOSS\\src\\eBOSS.Modules.Signature.Api\\WorkflowEngine.cs",
               lines: "lines 45-88"
             },
             {
@@ -247,8 +247,10 @@ const aiChat = {
       if (menu && !menu.hidden && !menu.contains(e.target) && e.target !== historyBtn) this.closeHistoryMenu();
     });
 
-    // Pre-render the active session so opening it later is instant.
-    this.switchSession(this.activeSessionId);
+    // Pre-render the active session so opening it later is instant. Not
+    // saved: page load (even the login screen) is not a user action, and
+    // writing here would put history straight back after a sign-out.
+    this.switchSession(this.activeSessionId, { save: false });
   },
 
   // ---- Persistence: chat history survives a reload, like the real app ----
@@ -424,7 +426,7 @@ const aiChat = {
     }
   },
 
-  switchSession(sessionId) {
+  switchSession(sessionId, { save = true } = {}) {
     if (!this.sessions[sessionId]) return;
     this.activeSessionId = sessionId;
 
@@ -438,7 +440,7 @@ const aiChat = {
 
     this.renderSession(sessionId);
     if (this.inputEl) this.inputEl.focus();
-    this.persist();
+    if (save) this.persist();
   },
 
   createNewSession() {
@@ -834,8 +836,10 @@ const aiChat = {
 
   renderMarkdown(src) {
     if (!src) return "";
-    let html = src;
-    html = html.replace(/`([^`\n]+)`/g, (match, code) => `<code>${this.escapeHtml(code)}</code>`);
+    // Escaped first: this text can be book content (/read) or a saved prompt,
+    // and it ends up in innerHTML.
+    let html = this.escapeHtml(src);
+    html = html.replace(/`([^`\n]+)`/g, (match, code) => `<code>${code}</code>`);
     html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
     html = html.replace(/^\s*[•\-\*]\s+(.*$)/gim, '<li class="ai-li">$1</li>');
@@ -851,7 +855,7 @@ const aiChat = {
       : "FrmCustomerServicesContractAppendix.vb";
     const curRepo = typeof state !== "undefined" && state.current && state.current.code_name
       ? state.current.code_name
-      : "eBOSS_Company";
+      : "eBOSS";
 
     // 1. Stealth EPUB reader
     if (q === "/read" || q === "/next") {
@@ -872,11 +876,11 @@ const aiChat = {
         thought: `Đang rà soát và tải phân đoạn logic #${pNum}/${totalBlocks} từ ${curModule}.`,
         insight: `Phân đoạn #${pNum} đã được nạp thành công vào bộ nhớ kiểm duyệt.`,
         read: {
-          file: `D:\\eBOSS Projects\\${curRepo}\\EDT\\${curModule}`,
+          file: `D:\\Projects\\${curRepo}\\src\\${curModule}`,
           lines: `lines ${100 + pNum * 5}-${120 + pNum * 5}`
         },
         edit: {
-          file: `D:\\eBOSS Projects\\${curRepo}\\EDT\\${curModule}`,
+          file: `D:\\Projects\\${curRepo}\\src\\${curModule}`,
           change: "Updated documentation comments & logic wrapper",
           oldLines: [
             { num: 105, type: "normal", code: `' [Internal Registry Ref #${pNum}]` },
@@ -891,7 +895,7 @@ const aiChat = {
         terminal: {
           type: "PowerShell",
           title: `Build verification for narrative segment #${pNum} in ${curModule}`,
-          inCmd: `& 'C:\\Program Files (x86)\\MSBuild\\14.0\\bin\\MSBuild.exe' 'D:\\eBOSS Projects\\${curRepo}\\eBOSS.sln' /t:Build /p:Configuration=Debug`,
+          inCmd: `& 'C:\\Program Files (x86)\\MSBuild\\14.0\\bin\\MSBuild.exe' 'D:\\Projects\\${curRepo}\\eBOSS.sln' /t:Build /p:Configuration=Debug`,
           outResult: `Build Succeeded: 0 Error(s), 0 Warning(s). Elapsed: 00:00:01.42`
         },
         body: [
@@ -913,11 +917,11 @@ const aiChat = {
         thought: "Đúng, tôi đang đệm cứng 7 số 0 bất kể Prefix dài bao nhiêu — sai. Sửa lại để số 0 co giãn theo đúng độ dài Prefix, giữ tổng luôn 11 ký tự.",
         insight: "Đã rà soát công thức sinh mã phụ lục: số 0 tự co lại theo độ dài Prefix.",
         read: {
-          file: "D:\\eBOSS Projects\\eBOSS_Company\\EDT\\eBOSS.Application.CustomerServices\\04. CustomerServicesContract\\FrmCustomerServicesContractAppendix.vb",
+          file: "D:\\Projects\\eBOSS\\src\\eBOSS.Application.CustomerServices\\04. CustomerServicesContract\\FrmCustomerServicesContractAppendix.vb",
           lines: "lines 109-153"
         },
         edit: {
-          file: "D:\\eBOSS Projects\\eBOSS_Company\\EDT\\eBOSS.Application.CustomerServices\\04. CustomerServicesContract\\FrmCustomerServicesContractAppendix.vb",
+          file: "D:\\Projects\\eBOSS\\src\\eBOSS.Application.CustomerServices\\04. CustomerServicesContract\\FrmCustomerServicesContractAppendix.vb",
           change: "Added 1 line",
           oldLines: [
             { num: 110, type: "normal", code: 'Dim RootKey As String = PrefixID & Format(ucRecordDate.Value, "yy")' },
@@ -934,8 +938,8 @@ const aiChat = {
         terminal: {
           type: "PowerShell",
           title: "Build after fixing dynamic zero-padding for variable prefix length",
-          inCmd: "& 'C:\\Program Files (x86)\\MSBuild\\14.0\\Bin\\MSBuild.exe' 'D:\\eBOSS Projects\\eBOSS_Company\\EDT\\eBOSS.Application.CustomerServices.sln' /t:Build",
-          outResult: "eBOSS.Application.CustomerServices -> C:\\Users\\DOPHAM~1\\AppData\\Local\\Temp\\claude\\out\\eBOSS.Application.CustomerServices.dll"
+          inCmd: "& 'C:\\Program Files (x86)\\MSBuild\\14.0\\Bin\\MSBuild.exe' 'D:\\Projects\\eBOSS\\src\\eBOSS.Application.CustomerServices.sln' /t:Build",
+          outResult: "eBOSS.Application.CustomerServices -> bin\\Debug\\eBOSS.Application.CustomerServices.dll"
         },
         body: [
           `• Đã sửa. Build lại qua MSBuild 14 không lỗi, nhưng chưa chạy thử trên màn hình thật.`,
@@ -957,11 +961,11 @@ const aiChat = {
       thought: `Phân tích yêu cầu "${prompt}", rà soát các ràng buộc kiến trúc trong module ${curModule} và xây dựng giải pháp xử lý.`,
       insight: `Đã hoàn tất phân tích module ${curModule}. Cần refactor để tối ưu luồng thực thi.`,
       read: {
-        file: `D:\\eBOSS Projects\\${curRepo}\\EDT\\${curModule}`,
+        file: `D:\\Projects\\${curRepo}\\src\\${curModule}`,
         lines: "lines 80-125"
       },
       edit: {
-        file: `D:\\eBOSS Projects\\${curRepo}\\EDT\\${curModule}`,
+        file: `D:\\Projects\\${curRepo}\\src\\${curModule}`,
         change: "Modified 2 lines",
         oldLines: [
           { num: 80, type: "normal", code: '<span class="claude-kw">Public Sub</span> ProcessRequest(req <span class="claude-kw">As</span> ServiceRequest)' },

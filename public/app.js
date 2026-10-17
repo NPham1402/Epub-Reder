@@ -351,7 +351,9 @@ function saveSettings() {
   localStorage.setItem("devdocs.settings", JSON.stringify(state.settings));
   if (typeof syncSettingsSoon === "function") syncSettingsSoon();
 }
+let signingOut = false; // pagehide during the sign-out reload must not write the tabs back
 function saveSession() {
+  if (signingOut) return;
   localStorage.setItem("devdocs.session", JSON.stringify({ tabs: state.tabs, activeKey: state.activeKey }));
 }
 
@@ -639,7 +641,7 @@ async function activate(key) {
   state.expanded.add(bookId);
   const ch = await loadChapter(book, idx);
   if (!ch) return;
-  state.current = { bookId, idx, code_name: book.code_name, fileName: fileLabel(ch), title: ch.title, book };
+  state.current = { bookId, idx, code_name: book.code_name, fileName: fileLabel(ch), title: ch.title, book, chapter: ch };
   await renderContent(ch);
   if (state.activeKey !== key) return; // superseded while the editor was loading
   renderTabs();
@@ -650,6 +652,8 @@ async function activate(key) {
   restoreScroll(key, book, idx);
   saveSession();
   extEvent("chapter");
+  thiefReader.pIdx = 0; // a new chapter starts the status-bar reader from its first paragraph
+  if (thiefReader.active) thiefReader.render();
   prefetchAround(book, idx);
 }
 
@@ -1316,16 +1320,28 @@ async function rerender() {
   await renderContent(ch);
   view.top = top;
 }
-$("#btn-logout").addEventListener("click", async () => {
-  await api("/api/logout", { method: "POST" }).catch(() => {});
+// Everything this app keeps in localStorage (open tabs, settings, queued
+// progress/highlights, chat history — which can hold book text via /read)
+// must not outlive a sign-out, same as the offline cache. Queues are pushed
+// first, while the session is still valid; offline, they're simply lost.
+async function signOut(endpoint) {
+  const flush = Promise.allSettled([
+    flushProgressQueue(),
+    typeof flushHighlights === "function" ? flushHighlights() : null,
+  ]);
+  await Promise.race([flush, new Promise((r) => setTimeout(r, 2000))]);
+  await api(endpoint, { method: "POST" }).catch(() => {});
   await clearOfflineCache();
+  signingOut = true;
+  try {
+    for (const k of Object.keys(localStorage)) if (k.startsWith("devdocs.")) localStorage.removeItem(k);
+  } catch {}
   location.reload();
-});
-$("#btn-logout-all").addEventListener("click", async () => {
+}
+$("#btn-logout").addEventListener("click", () => signOut("/api/logout"));
+$("#btn-logout-all").addEventListener("click", () => {
   if (!confirm("Sign out of every device, including this one?")) return;
-  await api("/api/logout-all", { method: "POST" }).catch(() => {});
-  await clearOfflineCache();
-  location.reload();
+  signOut("/api/logout-all");
 });
 
 document.querySelectorAll("[data-close]").forEach((b) => b.addEventListener("click", () => ($("#" + b.dataset.close).hidden = true)));
@@ -1659,7 +1675,7 @@ const PANIC_TEMPLATES = {
       { t: "info: eBOSS.Standard.SyncWorker[0]" },
       { t: "      Sync worker started." },
       { t: "info: eBOSS.Standard.FarmService[0]" },
-      { t: "      Loaded 42 record(s) from NLV_Farm." },
+      { t: "      Loaded 42 record(s) from Farm." },
       { t: "info: Microsoft.Hosting.Lifetime[0]" },
       { t: "      Application started. Press Ctrl+C to shut down." },
     ],
