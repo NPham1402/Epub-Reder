@@ -181,3 +181,79 @@ export async function readVbookBackup(
   await flush();
   return { manifest, books };
 }
+
+// ---- Writing: a minimal backup vBook can restore (EPR-21) --------------------
+
+// Plain ustar writer (names up to 255 bytes via the prefix field).
+export function writeTar(files: [string, string | Uint8Array][]): Uint8Array {
+  const enc = new TextEncoder();
+  const blocks: Uint8Array[] = [];
+  for (const [path, content] of files) {
+    const data = typeof content === "string" ? enc.encode(content) : content;
+    let name = path, prefix = "";
+    if (enc.encode(name).length > 100) {
+      const cut = name.lastIndexOf("/", 154);
+      prefix = name.slice(0, cut);
+      name = name.slice(cut + 1);
+    }
+    const h = new Uint8Array(512);
+    const put = (s: string, at: number, len: number) => h.set(enc.encode(s).subarray(0, len), at);
+    put(name, 0, 100);
+    put("0000644\0", 100, 8);
+    put("0000000\0", 108, 8);
+    put("0000000\0", 116, 8);
+    put(data.length.toString(8).padStart(11, "0") + "\0", 124, 12);
+    put(Math.floor(Date.now() / 1000).toString(8).padStart(11, "0") + "\0", 136, 12);
+    put("        ", 148, 8);
+    put("0", 156, 1);
+    put("ustar\0" + "00", 257, 8);
+    put(prefix, 345, 155);
+    put(h.reduce((a, b) => a + b, 0).toString(8).padStart(6, "0") + "\0 ", 148, 8);
+    blocks.push(h, data, new Uint8Array((512 - (data.length % 512)) % 512));
+  }
+  blocks.push(new Uint8Array(1024));
+  const out = new Uint8Array(blocks.reduce((n, b) => n + b.length, 0));
+  let o = 0;
+  for (const b of blocks) { out.set(b, o); o += b.length; }
+  return out;
+}
+
+export interface ProgressForVbook {
+  vbook_id: string;
+  meta: Record<string, unknown>; // vBook's own book record, as imported
+  chapter_idx: number;
+  ratio: number;
+  at: number;                    // epoch ms of the reading position
+  chapter_title: string | null;
+}
+
+// Only manifest.json + books/<id>/book.json, the record vBook keeps the reading
+// position in. Meant for vBook's "merge" restore; untested against a real
+// device (docs §13.7), so the page says so before handing it out.
+export function buildProgressBackup(items: ProgressForVbook[], now = Date.now()): { name: string; tar: Uint8Array } {
+  const files: [string, string][] = [[
+    "manifest.json",
+    JSON.stringify({ device_id: "devdocs", device_name: "devdocs", device_type: 0, app_version: "1.0", backup_version: 1, create_at: now }),
+  ]];
+  for (const it of items) {
+    const rec = {
+      ...it.meta,
+      id: it.vbook_id,
+      last_read_chapter_index: it.chapter_idx,
+      last_read_chapter_id: `${it.vbook_id}_${it.chapter_idx}`,
+      last_read_chapter_percent: Math.min(1, Math.max(0, it.ratio)),
+      ...(it.chapter_title ? { last_read_chapter_name: it.chapter_title } : {}),
+      last_read: it.at,
+      update_at: Math.max(Number(it.meta.update_at) || 0, it.at),
+    };
+    files.push([`books/${it.vbook_id}/book.json`, JSON.stringify(rec)]);
+  }
+  return { name: vbookBackupName(now), tar: writeTar(files) };
+}
+
+// vBook names its backups vbook_yyyyMMdd_HHmmss.tar.zst.
+export function vbookBackupName(ms: number): string {
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `vbook_${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}_${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}.tar.zst`;
+}

@@ -14,7 +14,7 @@
 //   APP_TITLE
 
 import { Readable } from "node:stream";
-import { createZstdDecompress } from "node:zlib";
+import { createZstdDecompress, zstdCompressSync } from "node:zlib";
 import { serve } from "@hono/node-server";
 import { statfsSync, existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -92,6 +92,8 @@ const env = {
   COOKIE_SECURE: process.env.COOKIE_SECURE,
   // vBook backups are .tar.zst; zstd is built into Node 24's zlib.
   VBOOK_UNZSTD: (src: AsyncIterable<Uint8Array>) => Readable.from(src).pipe(createZstdDecompress()) as AsyncIterable<Uint8Array>,
+  VBOOK_ZSTD: (bytes: Uint8Array) => new Uint8Array(zstdCompressSync(bytes)),
+  DAV_PASSWORD: process.env.DAV_PASSWORD || undefined,
   HEALTH_EXTRA: () => {
     const s = statfsSync(dataDir);
     const freePct = Math.round((Number(s.bavail) / Number(s.blocks)) * 1000) / 10;

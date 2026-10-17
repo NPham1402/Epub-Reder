@@ -217,3 +217,116 @@ describe("vBook backup import (server)", () => {
     assert.equal(j.ingest.length, 0);
   });
 });
+
+// ---- EPR-20: read-only WebDAV for vBook; EPR-21: positions back to vBook --------
+import { zstdDecompressSync } from "node:zlib";
+import { parseEpubMeta } from "../src/epub.ts";
+
+describe("WebDAV for vBook + positions back to vBook", () => {
+  let srv: TestServer;
+  let cookie: string;
+  const DAV = "dav-secret-pw";
+  const basic = (pw: string) => ({ authorization: "Basic " + Buffer.from(`vbook:${pw}`).toString("base64") });
+  const dav = (path: string, init: RequestInit = {}) => fetch(srv.base + path, init);
+  const propfind = (path: string, depth = "1", pw = DAV) => dav(path, { method: "PROPFIND", headers: { depth, ...basic(pw) } });
+  let bookId: string;
+
+  before(async () => {
+    srv = await startServer({ env: { DAV_PASSWORD: DAV } });
+    cookie = await login(srv.base);
+    const id = await sendBackup(srv.base, cookie, backup([FULL]));
+    const j = await runJob(srv.base, cookie, id, "import");
+    bookId = j.ingest[0].id;
+    await ingestAll(srv.base, cookie, bookId);
+  });
+  after(async () => { await srv.stop(); cleanup(srv.dataDir); });
+
+  test("no password / wrong password: 401 with a Basic challenge; nothing listed", async () => {
+    const none = await dav("/dav/", { method: "PROPFIND", headers: { depth: "1" } });
+    assert.equal(none.status, 401);
+    assert.match(none.headers.get("www-authenticate") ?? "", /^Basic/);
+    assert.equal((await propfind("/dav/", "1", "wrong")).status, 401);
+    // The reader passcode is not the WebDAV password.
+    assert.equal((await propfind("/dav/", "1", "correct horse battery staple")).status, 401);
+  });
+
+  test("lists every finished book as an .epub, plus the positions backup", async () => {
+    const res = await propfind("/dav/");
+    assert.equal(res.status, 207);
+    const xml = await res.text();
+    assert.match(xml, /<d:href>\/dav\/<\/d:href>/);
+    assert.match(xml, new RegExp(`<d:href>/dav/${encodeURIComponent("Trạch Nhật Phi Thăng.epub")}</d:href>`));
+    const backupName = xml.match(/vbook_\d{8}_\d{6}\.tar\.zst/)?.[0];
+    assert.ok(backupName, "positions backup is listed");
+    const again = await (await propfind("/dav/")).text();
+    assert.ok(again.includes(backupName!), "same name on the next listing (vBook lists, then downloads)");
+    const depth0 = await (await propfind("/dav/", "0")).text();
+    assert.ok(!depth0.includes(".epub"), "Depth: 0 is the folder only");
+  });
+
+  test("GET returns a real EPUB of the book; afterwards its size is listed", async () => {
+    const path = `/dav/${encodeURIComponent("Trạch Nhật Phi Thăng.epub")}`;
+    const res = await dav(path, { headers: basic(DAV) });
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get("content-type"), "application/epub+zip");
+    assert.match(res.headers.get("cache-control") ?? "", /no-store/);
+    const meta = parseEpubMeta(new Uint8Array(await res.arrayBuffer()));
+    assert.equal(meta.title, "Trạch Nhật Phi Thăng");
+    assert.equal(meta.spine.length, FULL.toc.length);
+    const xml = await (await propfind("/dav/")).text();
+    assert.match(xml, /<d:getcontentlength>\d+<\/d:getcontentlength>/);
+    assert.equal((await dav(path, { method: "HEAD", headers: basic(DAV) })).status, 200);
+  });
+
+  test("read-only: writes are refused", async () => {
+    for (const method of ["PUT", "DELETE", "MKCOL", "MOVE", "PROPPATCH"]) {
+      const r = await dav("/dav/x.epub", { method, headers: basic(DAV), body: method === "PUT" ? "x" : undefined });
+      assert.equal(r.status, 405, method);
+    }
+  });
+
+  test("positions backup carries this app's position in vBook's own book record", async () => {
+    await api(srv.base, cookie, `/api/books/${bookId}/progress`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chapter_idx: 2, scroll_ratio: 0.75, client_ts: T + 99_000 }),
+    });
+    const res = await api(srv.base, cookie, "/api/vbook/progress-backup");
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get("content-disposition") ?? "", /vbook_\d{8}_\d{6}\.tar\.zst/);
+    const files = new Map<string, string>();
+    async function* one() { yield new Uint8Array(zstdDecompressSync(new Uint8Array(await res.arrayBuffer()))); }
+    for await (const e of tarEntries(one())) files.set(e.name, new TextDecoder().decode(e.data));
+    assert.deepEqual([...files.keys()].sort(), ["books/aaa111/book.json", "manifest.json"]);
+    const rec = JSON.parse(files.get("books/aaa111/book.json")!);
+    assert.equal(rec.id, FULL.id);
+    assert.equal(rec.last_read_chapter_index, 2);
+    assert.equal(rec.last_read_chapter_id, "aaa111_2");
+    assert.equal(rec.last_read_chapter_percent, 0.75);
+    assert.equal(rec.last_read, T + 99_000);
+    assert.equal(rec.last_read_chapter_name, FULL.toc[2]);
+    assert.equal(rec.name.raw, FULL.name, "vBook's other fields are kept as they were");
+    assert.equal(rec.description, undefined);
+    assert.equal(JSON.parse(files.get("manifest.json")!).backup_version, 1);
+  });
+
+  test("deleting a book removes its cached .epub", async () => {
+    await api(srv.base, cookie, `/api/books/${bookId}`, { method: "DELETE" });
+    const xml = await (await propfind("/dav/")).text();
+    assert.ok(!xml.includes(".epub"));
+    assert.equal((await dav(`/dav/${encodeURIComponent("Trạch Nhật Phi Thăng.epub")}`, { headers: basic(DAV) })).status, 404);
+  });
+
+  test("repeated wrong passwords are throttled", async () => {
+    let last = 0;
+    for (let i = 0; i < 12; i++) last = (await propfind("/dav/", "1", "nope" + i)).status;
+    assert.equal(last, 429);
+  });
+});
+
+describe("WebDAV is off without DAV_PASSWORD", () => {
+  test("404", async () => {
+    const srv = await startServer();
+    try { assert.equal((await fetch(srv.base + "/dav/", { method: "PROPFIND" })).status, 404); }
+    finally { await srv.stop(); cleanup(srv.dataDir); }
+  });
+});

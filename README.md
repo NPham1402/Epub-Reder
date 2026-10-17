@@ -223,6 +223,20 @@ To make a whole book available before you know you'll be offline, open the
 next to it — it downloads every chapter. **Sign out** clears that cache, so signing
 out really signs out even offline.
 
+## vBook (phone app)
+
+- **Books and positions from vBook:** back up in vBook, drop the `.tar.zst` into
+  *Import module*. A preview lists every book (import / update a copy that is
+  already here / skip); imported books keep vBook's full chapter list, so the
+  reading position lands on the same chapter. Importing a newer backup updates
+  instead of duplicating.
+- **Read these books in vBook:** set `DAV_PASSWORD` on the server and add a
+  WebDAV source `https://<host>/dav/` in vBook (any user name, that password).
+  Read-only; every book is offered as an `.epub`.
+- **Positions back to vBook:** *Sync & Backup* → *Download positions for vBook*
+  (also listed in the WebDAV folder), restored in vBook's Merge mode. Not yet
+  tried on a real phone — back up vBook first.
+
 ## Notes & limits
 
 - Images inside EPUBs are stripped (text-only) — this keeps the "docs" disguise clean.

@@ -59,9 +59,9 @@ Trạng thái: ✅ xong + có test · ⏳ cần chủ hệ thống · 🔲 chưa
 | EPR-16 | P3 | Nhiều người dùng (tìm kiếm toàn văn đã chuyển sang EPR-22.5) | L | 🔲 | Chỉ làm khi quyết định 2 đổi |
 | EPR-17 | P1 | Tải lên theo mảnh 256 KB (thử lại từng mảnh, song song 3, có tiến độ, `complete` lặp lại an toàn) + báo rõ khi upload bị cắt | M | ✅ | File 22 MB qua trình duyệt thật, cố ý làm hỏng 4 mảnh (đứt kết nối ×2, 504, 429): vẫn ra đủ 2953 chương và đúng một cuốn sách; 6 test tích hợp |
 | EPR-18 | P1 | Phát hiện EPUB bị cụt (tải dở) **ngay trong trình duyệt** trước khi gửi byte nào, và server báo "cut off" thay vì `invalid zip data` | S | ✅ | File 22 MB thật: bản đủ qua, bản cắt còn 20 MiB bị chặn; 1 test tích hợp mới (32/32 xanh); đã chạy trên cụm (`b6b632d`) |
-| EPR-19 | P2 | **Nhập bản sao lưu vBook** (`.tar.zst`) qua web: sách có nội dung + tiến độ đọc (mục 13) | L | 🔲 | Nhập đúng file mẫu 14 sách/7 sách có chương; sách đã có không bị tạo trùng; tiến độ khớp; test bằng bản sao lưu giả nhỏ |
-| EPR-20 | P2 | **WebDAV chỉ đọc** để vBook duyệt và nhập sách từ EPUB reader (mục 13) | M | 🔲 | vBook trên điện thoại thấy danh sách và nhập được một cuốn; sai mật khẩu / thử quá nhiều lần bị chặn |
-| EPR-21 | P3 | Đưa **tiến độ đọc về vBook** bằng một bản sao lưu nhỏ mà vBook khôi phục ở chế độ gộp (mục 13) | M | 🔲 | Thử trên **bản sao/dữ liệu thử** trước; chỉ tính xong khi vBook trên điện thoại hiện đúng chương đã đọc mà không mất dữ liệu khác |
+| EPR-19 | P2 | **Nhập bản sao lưu vBook** (`.tar.zst`) qua web: sách có nội dung + tiến độ đọc (mục 13) | L | ✅ | Nhập đúng file mẫu 14 sách/7 sách có chương; sách đã có không bị tạo trùng; tiến độ khớp; test bằng bản sao lưu giả nhỏ |
+| EPR-20 | P2 | **WebDAV chỉ đọc** để vBook duyệt và nhập sách từ EPUB reader (mục 13) | M | ✅ code — bật bằng `DAV_PASSWORD`; chưa thử với vBook thật | vBook trên điện thoại thấy danh sách và nhập được một cuốn; sai mật khẩu / thử quá nhiều lần bị chặn |
+| EPR-21 | P3 | Đưa **tiến độ đọc về vBook** bằng một bản sao lưu nhỏ mà vBook khôi phục ở chế độ gộp (mục 13) | M | ✅ code — chưa thử khôi phục trên điện thoại | Thử trên **bản sao/dữ liệu thử** trước; chỉ tính xong khi vBook trên điện thoại hiện đúng chương đã đọc mà không mất dữ liệu khác |
 | EPR-22 | P2 | 11 tính năng học từ vBook — **kế hoạch chi tiết ở mục 14** (EPR-22.0 … 22.12, 4 giai đoạn có cổng thoát; **mọi giao diện phụ trợ nằm trong view Extensions**) | M–L | ✅ | Từng việc con có test riêng; cổng thoát của giai đoạn ở mục 14.5 |
 
 | EPR-23 | P2 | Cài thành app Windows ("Install app" trên Edge/Chrome): manifest + icon | S | ✅ | Xem mục 15 |
@@ -471,4 +471,25 @@ Lập bằng 3 vòng: (1) kiểm kê ~20 ứng viên từ lịch sử và quét 
 | 13–17 | EPR-05, EPR-14, EPR-15 (kèm README còn ghi "Cloudflare Workers"), EPR-19/20/21, EPR-16 | ⏳ như mục 11 |
 
 Thêm trong lúc làm: `renderMarkdown()` của panel chat giờ escape trước khi định dạng (đầu vào có thể là chữ trong sách hoặc prompt đã lưu, và nó đi vào `innerHTML`).
+
+## 17. Tương thích vBook đã làm (2026-10-17, EPR-19/20/21)
+
+Mặc định ở mục 13.5 được dùng: sách đã có thì **giữ bản đang có, chỉ cập nhật tiến độ**; WebDAV **tắt** cho tới khi đặt `DAV_PASSWORD` (mật khẩu riêng, không phải passcode).
+
+**EPR-19 — vBook → app (sách + tiến độ).** Thả file `.tar.zst` vào "Import module". Upload theo mảnh như sách; một job nền (trang hỏi trạng thái liên tục, vì đọc bản sao lưu lâu hơn 60 giây proxy chờ một request) đưa các mảnh qua zstd và đọc tar **theo luồng, từng sách** (`src/vbook.ts`). Xem trước: mỗi sách một dòng, chọn *Import / Update position / Skip*.
+- Sách nhập giữ **đủ danh sách chương của vBook**; chương chưa tải là chỗ giữ chỗ → số chương trùng vBook, tiến độ khớp tuyệt đối. Sách giữ `vbook_id` (migration 0010) → nhập bản sao lưu mới hơn chỉ cập nhật, không tạo trùng.
+- Sách đã có từ nguồn khác: ghép theo tên + tác giả; chương đang đọc tìm theo **tên chương**, không theo số.
+- Tiến độ dùng chung quy tắc với `/progress`: vị trí hiện tại theo đồng hồ mới hơn, "xa nhất" không bao giờ lùi.
+- **Nghiệm thu trên bản sao lưu thật** (48 MB, giải nén 191 MB): 14 sách xem trước; 7 sách có nội dung được nhập (12.121 chương); 7 sách vBook chưa tải chương nào bị bỏ qua (không đọc được, chưa có bản nào để gắn tiến độ). Tiến độ đúng như vBook (vd. Trạch Nhật Phi Thăng chương 973, 11%). Trên máy: upload 3 s, xem trước 1 s, nhập 12,6 s, lập chỉ mục 7,7 s; RAM server tối đa ~385 MB (giới hạn pod 1 GB).
+- **Chưa làm:** bookmark của vBook — cả 14 file `bookmarks.json` trong mẫu đều rỗng nên chưa biết định dạng.
+
+**EPR-20 — app → vBook (đọc sách trên điện thoại).** `/dav/` chỉ đọc (OPTIONS, PROPFIND độ sâu 0/1, GET, HEAD; mọi lệnh ghi 405), Basic auth bằng `DAV_PASSWORD`, giới hạn thử sai như đăng nhập (10 lần/15 phút mỗi nơi), `Cache-Control: private, no-store`. Mỗi sách đã nạp xong là một file `.epub` dựng từ chương đã lưu (dùng chung code xuất EPUB) và cache ở `dav/<id>.epub`; xoá/lập lại chỉ mục thì cache bị xoá.
+
+**EPR-21 — tiến độ về vBook.** Bản sao lưu tối thiểu `vbook_<yyyyMMdd_HHmmss>.tar.zst` (manifest + `books/<id>/book.json` lấy từ bản ghi vBook đã lưu, cập nhật `last_read_chapter_index/_id/_percent/_name` và `last_read`). Tải ở trang Sync & Backup, và cũng nằm trong thư mục WebDAV (tên theo lần đọc mới nhất, nên ổn định giữa hai lần liệt kê).
+
+**Việc của chủ hệ thống để bật WebDAV:** thêm khoá `DAV_PASSWORD` vào Secret `epub-reader-secrets` (deployment đã khai báo khoá này là `optional`), rồi trong vBook thêm nguồn WebDAV `https://vs.dophamnguyen.xyz/dav/`, tên đăng nhập bất kỳ.
+
+**Chưa kiểm chứng (cần điện thoại):** vBook duyệt/tải từ `/dav/` có đúng như chuẩn WebDAV không (§13.7); vBook khôi phục bản sao lưu một phần ở chế độ Gộp có giữ nguyên dữ liệu khác không — **sao lưu vBook trước khi thử**.
+
+Test: `tests/vbook.test.ts` (15: đọc tar theo luồng, tách đoạn, xem trước/nhập/nhập lại/không lùi tiến độ, ghép theo tên, WebDAV xác thực/liệt kê/tải/chỉ đọc/giới hạn thử sai/xoá cache, bản sao lưu tiến độ), `tests/ui/vbook-import.mjs` (13, toàn luồng trên trình duyệt).
 

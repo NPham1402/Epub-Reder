@@ -795,6 +795,8 @@ kbd {
 .vb-row { align-items: center; }
 .vb-action { background: var(--input-bg); color: var(--fg); border: 1px solid var(--input-border); border-radius: 3px; font-size: 12px; padding: 1px 4px; max-width: 200px; font-family: inherit; }
 .vb-action:disabled { opacity: 0.6; }
+a.xp-btn { text-decoration: none; }
+.xp-btn.disabled { opacity: 0.5; pointer-events: none; }
 
 /* Global Search */
 .gs-bar { display: flex; gap: 8px; margin-bottom: 10px; }

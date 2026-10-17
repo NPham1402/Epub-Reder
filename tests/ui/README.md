@@ -24,6 +24,7 @@ node --disable-warning=ExperimentalWarning tests/ui/claude-responsive.mjs # the 
 node --disable-warning=ExperimentalWarning tests/ui/claude-history.mjs    # chat history survives a reload; Recent Sessions; closing a tab keeps history
 node --disable-warning=ExperimentalWarning tests/ui/stealth-signout.mjs   # /read and the status-bar reader show real text; sign-out wipes localStorage
 node --disable-warning=ExperimentalWarning tests/ui/palette-docview.mjs   # Ctrl+G / Ctrl+Shift+P palette, Alt+M doc view, boss key over it
+node --disable-warning=ExperimentalWarning tests/ui/vbook-import.mjs      # vBook backup: preview, choices, import, resume at vBook's chapter, Sync & Backup card
 node --disable-warning=ExperimentalWarning tests/ui/layout.mjs capture   # once, on a known-good build
 node --disable-warning=ExperimentalWarning tests/ui/layout.mjs compare   # after a UI change: the shell must not move
 ```

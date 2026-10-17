@@ -15,7 +15,7 @@ import {
   abortIngest, busyBooks, contentBinKey, legacyContentKey, spineMetaKey, stagedKey, stagedPrefix, uploadPartKey, uploadPrefix,
 } from "./storage";
 import { discardUploadParts } from "./maintenance";
-import { readVbookBackup, sameTitle, type VbookBook } from "./vbook";
+import { buildProgressBackup, readVbookBackup, sameTitle, vbookBackupName, type VbookBook } from "./vbook";
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 const MAX_EPUB_BYTES = 80 * 1024 * 1024; // 80 MB guard
@@ -881,7 +881,7 @@ app.delete("/api/books/:id", async (c) => {
     if (!book) return c.json({ error: "not found" }, 404);
 
     if (!book.ingest_done) await abortIngest(c.env, id, book.ingest_upload_id);
-    await c.env.BOOKS.delete([book.r2_key, contentBinKey(id), legacyContentKey(id), spineMetaKey(id)]);
+    await c.env.BOOKS.delete([book.r2_key, contentBinKey(id), legacyContentKey(id), spineMetaKey(id), davEpubKey(id)]);
     await c.env.DB.batch([
       c.env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id),
       c.env.DB.prepare(`DELETE FROM progress WHERE book_id = ?`).bind(id),
@@ -955,7 +955,7 @@ app.post("/api/books/:id/reindex", async (c) => {
          ingest_offset = 0, ingest_parts_json = '[]'
        WHERE id = ?`,
     ).bind(id).run();
-    await c.env.BOOKS.delete(legacyContentKey(id));
+    await c.env.BOOKS.delete([legacyContentKey(id), davEpubKey(id)]);
 
     return c.json({ ok: true });
   } finally {
@@ -1308,14 +1308,8 @@ app.get("/api/books/:id/export", async (c) => {
   const last = Math.max(0, book.chapter_count - 1);
   const from = Math.min(last, Math.max(0, Math.floor(Number(c.req.query("from"))) || 0));
   const to = Math.min(last, Math.max(from, Number.isFinite(Number(c.req.query("to"))) && c.req.query("to") ? Math.floor(Number(c.req.query("to"))) : last));
-  const { results: rows } = await c.env.DB.prepare(
-    `SELECT idx, title, file_name, byte_offset, byte_length, blocks FROM chapters WHERE book_id = ? AND idx BETWEEN ? AND ? ORDER BY idx`,
-  ).bind(id, from, to).all<{ idx: number; title: string | null; file_name: string; byte_offset: number | null; byte_length: number | null; blocks: string | null }>();
-  if (!rows.length) return c.json({ error: "no chapters in that range" }, 404);
-
-  const chapters = [];
-  for (const r of rows) chapters.push({ title: r.title || r.file_name, blocks: await readBlocks(c.env, id, r) });
-  const input = { title: book.title, author: book.author, language: book.language, chapters };
+  const input = await exportInput(c.env, id, book, from, to);
+  if (!input) return c.json({ error: "no chapters in that range" }, 404);
 
   const real = c.req.query("real") === "1";
   const base = (real ? book.title : book.code_name).replace(/[\\/:*?"<>|\u0000-\u001F]/g, "_").trim().slice(0, 100) || "book";
@@ -1327,6 +1321,184 @@ app.get("/api/books/:id/export", async (c) => {
   if (format === "txt") return new Response(buildText(input), { headers });
   return new Response(buildEpub(input) as unknown as BodyInit, { headers });
 });
+
+async function exportInput(
+  env: Env, id: string, book: { title: string; author: string | null; language: string | null }, from: number, to: number,
+) {
+  const { results: rows } = await env.DB.prepare(
+    `SELECT idx, title, file_name, byte_offset, byte_length, blocks FROM chapters WHERE book_id = ? AND idx BETWEEN ? AND ? ORDER BY idx`,
+  ).bind(id, from, to).all<{ idx: number; title: string | null; file_name: string; byte_offset: number | null; byte_length: number | null; blocks: string | null }>();
+  if (!rows.length) return null;
+  const chapters = [];
+  for (const r of rows) chapters.push({ title: r.title || r.file_name, blocks: await readBlocks(env, id, r) });
+  return { title: book.title, author: book.author, language: book.language, chapters };
+}
+
+// --- Reading positions back to vBook (EPR-21) ----------------------------------
+// A minimal vBook backup holding only the book records of books that came from
+// vBook, with this app's reading position. Restored in vBook's "merge" mode.
+async function progressBackup(env: Env): Promise<{ name: string; bytes: Uint8Array } | null> {
+  if (!env.VBOOK_ZSTD) return null;
+  const { results } = await env.DB.prepare(
+    `SELECT b.vbook_id, b.vbook_json, p.chapter_idx, p.scroll_ratio, p.client_ts, p.updated_at,
+            (SELECT title FROM chapters ch WHERE ch.book_id = b.id AND ch.idx = p.chapter_idx) AS chapter_title
+     FROM books b JOIN progress p ON p.book_id = b.id
+     WHERE b.vbook_id IS NOT NULL AND b.vbook_json IS NOT NULL`,
+  ).all<{ vbook_id: string; vbook_json: string; chapter_idx: number; scroll_ratio: number; client_ts: number | null; updated_at: number; chapter_title: string | null }>();
+  if (!results.length) return null;
+  // Named and stamped after the newest reading position, so the WebDAV listing
+  // shows the same file name until a position actually changes.
+  const latest = Math.max(...results.map((r) => r.client_ts || r.updated_at));
+  const { name, tar } = buildProgressBackup(results.map((r) => ({
+    vbook_id: r.vbook_id,
+    meta: (safeParse(r.vbook_json) as Record<string, unknown>) ?? {},
+    chapter_idx: r.chapter_idx,
+    ratio: r.scroll_ratio,
+    at: r.client_ts || r.updated_at,
+    chapter_title: r.chapter_title,
+  })), latest);
+  return { name, bytes: env.VBOOK_ZSTD(tar) };
+}
+
+app.get("/api/vbook/status", async (c) => {
+  const r = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n, SUM(CASE WHEN p.book_id IS NULL THEN 0 ELSE 1 END) AS positions
+     FROM books b LEFT JOIN progress p ON p.book_id = b.id WHERE b.vbook_id IS NOT NULL`,
+  ).first<{ n: number; positions: number | null }>();
+  return c.json({ import: !!c.env.VBOOK_UNZSTD, dav: !!c.env.DAV_PASSWORD, books: r?.n ?? 0, positions: r?.positions ?? 0 });
+});
+
+app.get("/api/vbook/progress-backup", async (c) => {
+  if (!c.env.VBOOK_ZSTD) return c.json({ error: "only available on the self-hosted server" }, 501);
+  const b = await progressBackup(c.env);
+  if (!b) return c.json({ error: "no book imported from vBook has a reading position yet" }, 404);
+  return new Response(b.bytes as unknown as BodyInit, {
+    headers: { "content-type": "application/zstd", "content-disposition": `attachment; filename="${b.name}"` },
+  });
+});
+
+// --- WebDAV, read-only, for vBook (EPR-20, docs §13.4) --------------------------
+// vBook can use a WebDAV server as a book source: it lists the folder
+// (PROPFIND) and downloads a file (GET). Here every finished book is an .epub
+// built from the stored chapters (the original upload is not kept in a form
+// vBook reads) and cached, plus a vbook_*.tar.zst of reading positions vBook
+// can restore. Own password (DAV_PASSWORD), separate from the reader passcode,
+// throttled like login; nothing can be written. Without DAV_PASSWORD there is
+// no endpoint at all.
+const davPerClient = new FailureLimiter({ max: 10, windowMs: LOGIN_WINDOW_MS });
+const davGlobal = new FailureLimiter({ max: 100, windowMs: LOGIN_WINDOW_MS });
+const davEpubKey = (id: string) => `dav/${id}.epub`;
+const davBuilding = new Map<string, Promise<number>>();
+
+interface DavBook { id: string; title: string; author: string | null; language: string | null; chapter_count: number; created_at: number }
+interface DavFile { name: string; size: number | null; type: string; modified: number; book?: DavBook; backup?: boolean }
+
+async function davEnsureEpub(env: Env, b: DavBook): Promise<number> {
+  let p = davBuilding.get(b.id);
+  if (!p) {
+    p = (async () => {
+      const input = await exportInput(env, b.id, b, 0, Math.max(0, b.chapter_count - 1));
+      const bytes = buildEpub(input ?? { title: b.title, author: b.author, language: b.language, chapters: [] });
+      await env.BOOKS.put(davEpubKey(b.id), bytes, { httpMetadata: { contentType: "application/epub+zip" } });
+      return bytes.length;
+    })().finally(() => davBuilding.delete(b.id));
+    davBuilding.set(b.id, p);
+  }
+  return p;
+}
+
+async function davListing(env: Env): Promise<DavFile[]> {
+  const { results } = await env.DB.prepare(
+    `SELECT id, title, author, language, chapter_count, created_at FROM books WHERE ingest_done = 1 ORDER BY title`,
+  ).all<DavBook>();
+  const { objects } = await env.BOOKS.list({ prefix: "dav/" });
+  const sizes = new Map(objects.map((o) => [o.key, o.size]));
+  const used = new Set<string>();
+  const files: DavFile[] = results.map((b) => {
+    const base = b.title.replace(/[\\/:*?"<>|\u0000-\u001F]/g, "_").trim().slice(0, 120) || "book";
+    let name = `${base}.epub`;
+    for (let n = 2; used.has(name.toLowerCase()); n++) name = `${base} (${n}).epub`;
+    used.add(name.toLowerCase());
+    return { name, size: sizes.get(davEpubKey(b.id)) ?? null, type: "application/epub+zip", modified: b.created_at, book: b };
+  });
+  if (env.VBOOK_ZSTD) {
+    const row = await env.DB.prepare(
+      `SELECT MAX(COALESCE(p.client_ts, p.updated_at)) AS at FROM books b JOIN progress p ON p.book_id = b.id
+       WHERE b.vbook_id IS NOT NULL AND b.vbook_json IS NOT NULL`,
+    ).first<{ at: number | null }>();
+    if (row?.at) files.push({ name: vbookBackupName(row.at), size: null, type: "application/zstd", modified: row.at, backup: true });
+  }
+  return files;
+}
+
+const xmlEsc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+function davResponse(href: string, props: { collection?: boolean; name: string; size?: number | null; type?: string; modified: number }): string {
+  const p = [
+    `<d:displayname>${xmlEsc(props.name)}</d:displayname>`,
+    props.collection ? "<d:resourcetype><d:collection/></d:resourcetype>" : "<d:resourcetype/>",
+    `<d:getlastmodified>${new Date(props.modified).toUTCString()}</d:getlastmodified>`,
+  ];
+  if (!props.collection) {
+    p.push(`<d:getcontenttype>${props.type}</d:getcontenttype>`);
+    if (props.size != null) p.push(`<d:getcontentlength>${props.size}</d:getcontentlength>`);
+    p.push(`<d:getetag>"${props.modified.toString(36)}-${props.size ?? 0}"</d:getetag>`);
+  }
+  return `<d:response><d:href>${xmlEsc(href)}</d:href><d:propstat><d:prop>${p.join("")}</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`;
+}
+
+app.all("/dav/*", async (c) => davHandler(c));
+app.all("/dav", async (c) => davHandler(c));
+async function davHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
+  if (!c.env.DAV_PASSWORD) return c.json({ error: "not found" }, 404);
+  const noStore = { "cache-control": "private, no-store" };
+  const client = clientKey(c);
+  const wait = Math.max(davPerClient.retryAfter(client), davGlobal.retryAfter("*"));
+  if (wait > 0) return new Response("too many attempts", { status: 429, headers: { "retry-after": String(Math.ceil(wait / 1000)) } });
+  const auth = c.req.header("authorization") ?? "";
+  let password = "";
+  if (/^basic /i.test(auth)) {
+    try { password = atob(auth.slice(6).trim()).split(":").slice(1).join(":"); } catch { password = ""; }
+  }
+  if (!password || !(await passcodeMatches(password, c.env.DAV_PASSWORD, c.env.SESSION_SECRET))) {
+    if (password) { davPerClient.fail(client); davGlobal.fail("*"); }
+    return new Response("authentication required", { status: 401, headers: { "www-authenticate": 'Basic realm="books", charset="UTF-8"', ...noStore } });
+  }
+
+  const method = c.req.method.toUpperCase();
+  const rel = decodeURIComponent(new URL(c.req.url).pathname.replace(/^\/dav\/?/, ""));
+  if (method === "OPTIONS") return new Response(null, { headers: { dav: "1", allow: "OPTIONS, PROPFIND, GET, HEAD", ...noStore } });
+  if (!["PROPFIND", "GET", "HEAD"].includes(method)) return new Response("read-only", { status: 405, headers: { allow: "OPTIONS, PROPFIND, GET, HEAD" } });
+
+  const files = await davListing(c.env);
+  if (rel === "") {
+    if (method !== "PROPFIND") return new Response("this is a folder", { status: 405, headers: noStore });
+    const depth = c.req.header("depth") ?? "1";
+    const parts = [davResponse("/dav/", { collection: true, name: "books", modified: Date.now() })];
+    if (depth !== "0") for (const f of files) parts.push(davResponse(`/dav/${encodeURIComponent(f.name)}`, f));
+    return new Response(`<?xml version="1.0" encoding="utf-8"?>\n<d:multistatus xmlns:d="DAV:">${parts.join("")}</d:multistatus>`,
+      { status: 207, headers: { "content-type": 'application/xml; charset="utf-8"', ...noStore } });
+  }
+  const f = files.find((x) => x.name === rel);
+  if (!f) return new Response("not found", { status: 404, headers: noStore });
+
+  let bytes: Uint8Array;
+  if (f.backup) {
+    const b = await progressBackup(c.env);
+    if (!b) return new Response("not found", { status: 404, headers: noStore });
+    bytes = b.bytes;
+  } else {
+    if (f.size == null) await davEnsureEpub(c.env, f.book!);
+    const obj = await c.env.BOOKS.get(davEpubKey(f.book!.id));
+    if (!obj) return new Response("not found", { status: 404, headers: noStore });
+    bytes = new Uint8Array(await obj.arrayBuffer());
+  }
+  if (method === "PROPFIND") {
+    return new Response(`<?xml version="1.0" encoding="utf-8"?>\n<d:multistatus xmlns:d="DAV:">${davResponse(`/dav/${encodeURIComponent(f.name)}`, { ...f, size: bytes.length })}</d:multistatus>`,
+      { status: 207, headers: { "content-type": 'application/xml; charset="utf-8"', ...noStore } });
+  }
+  const headers = { "content-type": f.type, "content-length": String(bytes.length), "last-modified": new Date(f.modified).toUTCString(), ...noStore };
+  return new Response(method === "HEAD" ? null : (bytes as unknown as BodyInit), { headers });
+}
 
 // --- Static assets fallback --------------------------------------------------
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));

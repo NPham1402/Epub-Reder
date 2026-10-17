@@ -80,6 +80,17 @@ try {
   await page.waitForSelector(".monaco-editor .view-line", { timeout: 20000 });
   const text = await page.evaluate(() => monaco.editor.getEditors()[0].getModel().getValue());
   check("the chapter text is vBook's", text.includes("keep1 para 12 one"));
+
+  // Sync & Backup: the vBook card.
+  await page.click('.ab-icon[data-view="extensions"]');
+  await page.locator("#ext-list .ext-item", { hasText: "Sync & Backup" }).click();
+  await page.waitForSelector("#vbook-positions", { timeout: 10000 });
+  const card = await page.textContent("#vbook-card");
+  check("Sync & Backup shows how many modules came from vBook", /1 module came from a vBook backup/.test(card), card.slice(0, 70));
+  check("WebDAV is reported off when no password is set", /WebDAV for vBook is off/.test(card));
+  check("positions download is offered once a vBook module has a position", (await page.getAttribute("#vbook-positions", "href")) === "/api/vbook/progress-backup");
+  const dl = await page.request.get(srv.base + "/api/vbook/progress-backup");
+  check("and downloads a vbook_*.tar.zst", dl.status() === 200 && /vbook_\d{8}_\d{6}\.tar\.zst/.test(dl.headers()["content-disposition"] || ""), dl.headers()["content-disposition"]);
 } catch (e) {
   failed++;
   console.log("FAIL  exception: " + e);

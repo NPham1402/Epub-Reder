@@ -312,6 +312,36 @@ registerExtension({
 
     body.appendChild(actBox);
 
+    // vBook (phone app): read these books from it over WebDAV, and hand
+    // reading positions back to it as a backup it restores.
+    const vb = el("div", "xp-card");
+    vb.id = "vbook-card";
+    vb.appendChild(el("h3", "xp-sec-title", "vBook"));
+    const vbStatus = el("p", "xp-sec-desc", "Checking…");
+    vb.appendChild(vbStatus);
+    body.appendChild(vb);
+    api("/api/vbook/status").then((r) => r.json()).then((s) => {
+      vbStatus.textContent = `${s.books} module${s.books === 1 ? "" : "s"} came from a vBook backup. To bring books and positions over from vBook, back up in vBook and drop the .tar.zst into Import module.`;
+      const davLine = el("p", "xp-sec-desc");
+      davLine.id = "vbook-dav";
+      if (s.dav) {
+        davLine.appendChild(document.createTextNode("Read these modules in vBook: add a WebDAV source "));
+        davLine.appendChild(el("code", null, `${location.origin}/dav/`));
+        davLine.appendChild(document.createTextNode(" — any user name, the WebDAV password (not the passcode)."));
+      } else {
+        davLine.textContent = "WebDAV for vBook is off (set DAV_PASSWORD on the server to turn it on).";
+      }
+      vb.appendChild(davLine);
+      const row = el("div", "xp-action-toolbar");
+      const dl = el("a", "xp-btn secondary", "Download positions for vBook");
+      dl.id = "vbook-positions";
+      if (s.positions) { dl.href = "/api/vbook/progress-backup"; dl.setAttribute("download", ""); }
+      else { dl.setAttribute("aria-disabled", "true"); dl.classList.add("disabled"); dl.title = "No module from vBook has a reading position yet."; }
+      row.appendChild(dl);
+      vb.appendChild(row);
+      vb.appendChild(el("p", "xp-sec-desc", "In vBook, restore that file in Merge mode: it only carries the reading position of books that came from vBook. Not yet tried against a real phone — back up vBook first."));
+    }).catch(() => { vbStatus.textContent = "Could not reach the server."; });
+
     // 4. Synchronized Data Entities Section
     const sec = el("div", "xp-card");
     sec.appendChild(el("h3", "xp-sec-title", "Synchronized Data Entities"));
