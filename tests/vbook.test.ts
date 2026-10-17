@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import { zstdCompressSync } from "node:zlib";
 import { api, cleanup, ingestAll, login, makeEpub, startServer, upload, type TestServer } from "./helpers.ts";
 import { putPart, startUpload } from "./upload-helpers.ts";
-import { chapterParagraphs, readVbookBackup, tarEntries } from "../src/vbook.ts";
+import { chapterParagraphs, readVbookBackup, sessionBuckets, tarEntries } from "../src/vbook.ts";
 
 // ---- a tiny ustar writer -------------------------------------------------------
 function tar(files: [string, string | Uint8Array][]): Uint8Array {
@@ -67,8 +67,9 @@ const PARTIAL: FakeBook = { id: "bbb222", name: "Đại Chúa Tể", author: "Th
 const NONE: FakeBook = { id: "ccc333", name: "Văn Phòng Ẩn Hôn", author: "Khinh Ảm", toc: ["Chương 1"], have: [] };
 const OWNED: FakeBook = { id: "ddd444", name: "Owned Book", author: "Test Author", toc: ["Intro", "Chapter 1", "Chapter 2", "Chapter 3"], have: [], read: [2, 0.4, T, "Chapter 2"] };
 
-function backup(books: FakeBook[], pad = 0): Uint8Array {
+function backup(books: FakeBook[], pad = 0, histories: { id: string; read_time: number; create_at: number }[] = []): Uint8Array {
   const files: [string, string | Uint8Array][] = [["manifest.json", JSON.stringify({ device_name: "test phone", backup_version: 1, create_at: T })]];
+  if (histories.length) files.push(["read_histories.json", JSON.stringify(histories.map((h) => ({ ...h, listen_time: 0 })))]);
   for (const b of books) files.push(...fakeBook(b));
   // Incompressible filler outside books/ so the upload spans several parts.
   if (pad) files.push(["pad.bin", new Uint8Array(randomBytes(pad))]);
@@ -116,6 +117,18 @@ describe("vBook backup reading (unit)", () => {
   test("chapter HTML becomes paragraphs; the repeated title line is dropped; entities decoded", () => {
     const paras = chapterParagraphs(chapterHtml("Chương 2 - Nộ phạm", ["a &amp; b <i>c</i>", "d"]), "Chương 2 - Nộ phạm");
     assert.deepEqual(paras, ["a & b c", "d"]);
+  });
+
+  test("a reading session is spread over the local clock hours it covers", () => {
+    // 2026-10-17 01:50 UTC = 08:50 in UTC+7; 25 minutes -> 10 min in hour 8, 15 in hour 9.
+    const start = Date.UTC(2026, 9, 17, 1, 50, 0);
+    assert.deepEqual(sessionBuckets(start, 25 * 60, -420), [
+      { day: "2026-10-17", hour: 8, seconds: 600 },
+      { day: "2026-10-17", hour: 9, seconds: 900 },
+    ]);
+    // Crossing local midnight changes the day.
+    assert.deepEqual(sessionBuckets(Date.UTC(2026, 9, 17, 16, 59, 0), 120, -420).map((b) => [b.day, b.hour, b.seconds]),
+      [["2026-10-17", 23, 60], ["2026-10-18", 0, 60]]);
   });
 
   test("preview pass counts chapters without keeping their text", async () => {
@@ -357,5 +370,60 @@ describe("WebDAV is off without DAV_PASSWORD", () => {
     const srv = await startServer();
     try { assert.equal((await fetch(srv.base + "/dav/", { method: "PROPFIND" })).status, 404); }
     finally { await srv.stop(); cleanup(srv.dataDir); }
+  });
+});
+
+describe("vBook reading time -> Activity Insights", () => {
+  let srv: TestServer;
+  let cookie: string;
+  const day = Date.UTC(2026, 9, 10, 2, 0, 0); // 09:00 in UTC+7
+  const H = [
+    { id: "s1", read_time: 30 * 60_000, create_at: day },
+    { id: "s2", read_time: 10 * 60_000, create_at: day + 2 * 3_600_000 },
+  ];
+  const stats = async () => (await (await api(srv.base, cookie, "/api/stats?days=732")).json()) as { daily: { day: string; seconds: number }[]; per_book: { book_id: string; seconds: number }[] };
+  interface HJob { state: string; history: { sessions: number; fresh: number; fresh_seconds: number; added: number } }
+  const job = async (mode: string, extra: Record<string, unknown>, hist = H): Promise<HJob> => {
+    const id = await sendBackup(srv.base, cookie, backup([NONE], 0, hist));
+    const res = await api(srv.base, cookie, `/api/uploads/${id}/vbook`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode, ...extra }) });
+    const { job: jid } = (await res.json()) as { job: string };
+    for (;;) {
+      const j = (await (await api(srv.base, cookie, `/api/vbook-jobs/${jid}`)).json()) as HJob;
+      if (j.state !== "running") {
+        if (mode === "preview") await api(srv.base, cookie, `/api/uploads/${id}`, { method: "DELETE" });
+        return j;
+      }
+      await new Promise((r) => setTimeout(r, 40));
+    }
+  };
+
+  before(async () => { srv = await startServer(); cookie = await login(srv.base); });
+  after(async () => { await srv.stop(); cleanup(srv.dataDir); });
+
+  test("preview counts the sessions not added yet", async () => {
+    const j = await job("preview", {});
+    assert.deepEqual(j.history, { sessions: 2, fresh: 2, fresh_seconds: 2400, added: 0 });
+  });
+
+  test("unticked: nothing is added", async () => {
+    await job("import", { history: false, tz_offset: -420 });
+    assert.equal((await stats()).daily.length, 0);
+  });
+
+  test("import adds them on the reader's local day, under vBook", async () => {
+    const j = await job("import", { history: true, tz_offset: -420 });
+    assert.equal(j.history.added, 2);
+    const s = await stats();
+    assert.deepEqual(s.daily, [{ day: "2026-10-10", seconds: 2400 }]);
+    assert.deepEqual(s.per_book, [{ book_id: "vbook", seconds: 2400 }]);
+  });
+
+  test("a newer backup with the same sessions plus one more adds only the new one", async () => {
+    const more = [...H, { id: "s3", read_time: 5 * 60_000, create_at: day + 26 * 3_600_000 }];
+    assert.equal((await job("preview", {}, more)).history.fresh, 1);
+    await job("import", { history: true, tz_offset: -420 }, more);
+    const s = await stats();
+    assert.equal(s.daily.reduce((a, d) => a + d.seconds, 0), 2700);
+    assert.equal(s.daily.length, 2);
   });
 });

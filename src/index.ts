@@ -15,7 +15,7 @@ import {
   abortIngest, busyBooks, contentBinKey, legacyContentKey, spineMetaKey, stagedKey, stagedPrefix, uploadPartKey, uploadPrefix,
 } from "./storage";
 import { discardUploadParts } from "./maintenance";
-import { buildProgressBackup, readVbookBackup, sameTitle, vbookBackupName, type VbookBook } from "./vbook";
+import { buildProgressBackup, readVbookBackup, sameTitle, sessionBuckets, vbookBackupName, type VbookBook } from "./vbook";
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 const MAX_EPUB_BYTES = 80 * 1024 * 1024; // 80 MB guard
@@ -617,6 +617,8 @@ interface VbookJob {
   device: string | null; created_at: number | null;
   items: VbookItem[];
   ingest: { id: string; code_name: string; title: string; total: number }[];
+  // vBook's reading sessions; "fresh" = not added to Activity Insights before.
+  history: { sessions: number; fresh: number; fresh_seconds: number; added: number } | null;
 }
 const vbookJobs = new Map<string, VbookJob>();
 // Placeholder for a chapter vBook listed but never downloaded: keeps chapter
@@ -700,7 +702,9 @@ async function replaceBookContent(env: Env, id: string, bytes: Uint8Array): Prom
   }
 }
 
-async function runVbookJob(env: Env, job: VbookJob, parts: number, choices: Record<string, string>): Promise<void> {
+async function runVbookJob(
+  env: Env, job: VbookJob, parts: number, choices: Record<string, string>, opts: { history: boolean; tzOffset: number },
+): Promise<void> {
   const unzstd = env.VBOOK_UNZSTD!;
   const { results: rows } = await env.DB.prepare(
     `SELECT id, title, author, code_name, chapter_count, vbook_id, ingest_done, vbook_downloaded FROM books`,
@@ -721,7 +725,7 @@ async function runVbookJob(env: Env, job: VbookJob, parts: number, choices: Reco
     }, { withContent: false });
   }
 
-  const { manifest } = await readVbookBackup(unzstd(uploadedBytes(env, job.uploadId, parts)), async (b) => {
+  const { manifest, sessions } = await readVbookBackup(unzstd(uploadedBytes(env, job.uploadId, parts)), async (b) => {
     job.scanned++;
     job.current = b.title;
     const item = planVbook(b, rows);
@@ -783,6 +787,34 @@ async function runVbookJob(env: Env, job: VbookJob, parts: number, choices: Reco
   job.device = manifest?.device_name ?? null;
   job.created_at = manifest?.create_at ?? null;
   job.current = null;
+
+  // Reading time: vBook's sessions aren't tied to a book, so they count under
+  // one pseudo-book "vbook". Each session is added once, ever.
+  const { results: seen } = await env.DB.prepare(`SELECT id FROM vbook_sessions`).all<{ id: string }>();
+  const seenIds = new Set(seen.map((r) => r.id));
+  const fresh = sessions.filter((x) => !seenIds.has(x.id));
+  job.history = { sessions: sessions.length, fresh: fresh.length, fresh_seconds: fresh.reduce((a, x) => a + x.seconds, 0), added: 0 };
+  if (job.mode === "import" && opts.history && fresh.length) {
+    const buckets = new Map<string, number>();
+    for (const x of fresh) {
+      for (const b of sessionBuckets(x.at, x.seconds, opts.tzOffset)) {
+        const k = `${b.day}|${b.hour}`;
+        buckets.set(k, Math.min(3600, (buckets.get(k) ?? 0) + b.seconds));
+      }
+    }
+    const stmts = [
+      ...[...buckets].map(([k, sec]) => {
+        const [day, hour] = k.split("|");
+        return env.DB.prepare(
+          `INSERT INTO reading_hourly (day, hour, book_id, seconds) VALUES (?, ?, 'vbook', ?)
+           ON CONFLICT(day, hour, book_id) DO UPDATE SET seconds = seconds + excluded.seconds`,
+        ).bind(day, Number(hour), sec);
+      }),
+      ...fresh.map((x) => env.DB.prepare(`INSERT OR IGNORE INTO vbook_sessions (id, imported_at) VALUES (?, ?)`).bind(x.id, Date.now())),
+    ];
+    for (let i = 0; i < stmts.length; i += 100) await env.DB.batch(stmts.slice(i, i + 100));
+    job.history.added = fresh.length;
+  }
   if (job.mode === "import") {
     await discardUploadParts(env, job.uploadId);
     await env.DB.prepare(`DELETE FROM uploads WHERE id = ?`).bind(job.uploadId).run();
@@ -792,8 +824,9 @@ async function runVbookJob(env: Env, job: VbookJob, parts: number, choices: Reco
 app.post("/api/uploads/:id/vbook", async (c) => {
   if (!c.env.VBOOK_UNZSTD) return c.json({ error: "vBook backups can only be imported on the self-hosted server" }, 501);
   const id = c.req.param("id");
-  const body = (await c.req.json().catch(() => ({}))) as { mode?: string; actions?: Record<string, string> };
+  const body = (await c.req.json().catch(() => ({}))) as { mode?: string; actions?: Record<string, string>; history?: boolean; tz_offset?: number };
   const mode = body.mode === "import" ? "import" : "preview";
+  const tzOffset = isInt(body.tz_offset, -840, 840) ? (body.tz_offset as number) : 0;
   const up = await c.env.DB.prepare(`SELECT size, part_size, book_id, name FROM uploads WHERE id = ?`).bind(id).first<UploadRow>();
   if (!up) return c.json({ error: "not found" }, 404);
   if (!VBOOK_NAME_RE.test(up.name ?? "")) return c.json({ error: "not a vBook backup (.tar.zst)" }, 400);
@@ -813,10 +846,10 @@ app.post("/api/uploads/:id/vbook", async (c) => {
   }
   const job: VbookJob = {
     id: crypto.randomUUID(), uploadId: id, mode, at: Date.now(), state: "running", scanned: 0, current: null,
-    error: null, device: null, created_at: null, items: [], ingest: [],
+    error: null, device: null, created_at: null, items: [], ingest: [], history: null,
   };
   vbookJobs.set(job.id, job);
-  runVbookJob(c.env, job, parts, body.actions ?? {}).then(
+  runVbookJob(c.env, job, parts, body.actions ?? {}, { history: body.history !== false, tzOffset }).then(
     () => { job.state = "done"; },
     (err) => { job.state = "error"; job.error = errMsg(err); console.error("vbook import", err); },
   );

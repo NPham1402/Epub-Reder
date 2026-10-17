@@ -74,6 +74,8 @@ export interface VbookBook {
   meta: Record<string, unknown>;          // book.json without the long description
 }
 export interface VbookManifest { device_name?: string; backup_version?: number; create_at?: number }
+// One reading session from read_histories.json (not tied to a book there).
+export interface VbookSession { id: string; seconds: number; at: number }
 
 const json = (d: Uint8Array) => JSON.parse(new TextDecoder().decode(d)) as unknown;
 const raw = (v: unknown): string => (v && typeof v === "object" && "raw" in v ? String((v as { raw: unknown }).raw ?? "") : String(v ?? "")).trim();
@@ -137,8 +139,9 @@ export async function readVbookBackup(
   src: AsyncIterable<Uint8Array>,
   onBook: (b: VbookBook) => Promise<void>,
   opts: { withContent: boolean; only?: Set<string> },
-): Promise<{ manifest: VbookManifest | null; books: number }> {
+): Promise<{ manifest: VbookManifest | null; books: number; sessions: VbookSession[] }> {
   let manifest: VbookManifest | null = null;
+  let sessions: VbookSession[] = [];
   let curId: string | null = null;
   let cur: Pending | null = null;
   const finished = new Set<string>();
@@ -156,6 +159,19 @@ export async function readVbookBackup(
   for await (const e of tarEntries(src)) {
     const name = e.name.replace(/^\.\//, "");
     if (name === "manifest.json") { manifest = json(e.data) as VbookManifest; continue; }
+    if (name === "read_histories.json") {
+      const list = json(e.data);
+      if (Array.isArray(list)) {
+        sessions = list.flatMap((h) => {
+          const x = h as { id?: unknown; read_time?: unknown; create_at?: unknown };
+          const seconds = Math.round(Number(x.read_time) / 1000);
+          const at = Number(x.create_at);
+          return typeof x.id === "string" && seconds > 0 && Number.isFinite(at) && at > 0
+            ? [{ id: x.id.slice(0, 64), seconds: Math.min(seconds, 24 * 3600), at }] : [];
+        });
+      }
+      continue;
+    }
     const m = name.match(/^books\/([^/]+)\/(.+)$/);
     if (!m) continue;
     const [, id, rest] = m;
@@ -179,7 +195,25 @@ export async function readVbookBackup(
     }
   }
   await flush();
-  return { manifest, books };
+  return { manifest, books, sessions };
+}
+
+// Spreads a session over the local clock hours it covers (the stats table is
+// per day + hour, in the reader's own time zone). tzOffsetMin is what
+// Date#getTimezoneOffset() gives on the reader's device (UTC+7 -> -420).
+export function sessionBuckets(startMs: number, seconds: number, tzOffsetMin: number): { day: string; hour: number; seconds: number }[] {
+  const out: { day: string; hour: number; seconds: number }[] = [];
+  let t = startMs - tzOffsetMin * 60_000; // local wall clock, read through the UTC fields
+  let left = seconds;
+  while (left > 0) {
+    const d = new Date(t);
+    const intoHour = d.getUTCMinutes() * 60 + d.getUTCSeconds();
+    const take = Math.min(left, 3600 - intoHour);
+    out.push({ day: d.toISOString().slice(0, 10), hour: d.getUTCHours(), seconds: take });
+    left -= take;
+    t += take * 1000;
+  }
+  return out;
 }
 
 // ---- Writing: a minimal backup vBook can restore (EPR-21) --------------------

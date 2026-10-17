@@ -163,7 +163,7 @@ async function renderInsights(body) {
   for (const b of stats.per_book.slice(0, 5)) {
     const book = bookById(b.book_id);
     const row = el("div", "in-book");
-    row.appendChild(el("span", "in-book-name", book ? bookLabel(book) : "(removed module)"));
+    row.appendChild(el("span", "in-book-name", book ? bookLabel(book) : b.book_id === "vbook" ? "vBook (phone)" : "(removed module)"));
     row.appendChild(el("span", "in-book-time", fmtDuration(b.seconds)));
     list.appendChild(row);
   }

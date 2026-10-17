@@ -34,6 +34,7 @@ function book(id, name, toc, have, read) {
 const toc = Array.from({ length: 30 }, (_, i) => `Chương ${i + 1} - Tên ${i + 1}`);
 const backup = zstdCompressSync(tar([
   ["manifest.json", JSON.stringify({ device_name: "phone", backup_version: 1, create_at: 1789000000000 })],
+  ["read_histories.json", JSON.stringify([{ id: "h1", read_time: 45 * 60_000, listen_time: 0, create_at: Date.now() - 86_400_000 }])],
   ...book("keep1", "Kept Book", toc, toc.map((_, i) => i), [12, 0.5]),
   ...book("skip2", "Skipped Book", toc, [0, 1], [0, 0]),
   ...book("none3", "Nothing Downloaded", toc, [], [3, 0]),
@@ -63,11 +64,12 @@ try {
   check("defaults: import books with text, skip the one with none", JSON.stringify(defaults) === JSON.stringify(["create", "create", "skip"]), defaults.join(","));
   check("a book with nothing downloaded can't be imported", await page.locator(".vb-action").nth(2).isDisabled());
   check("a partly downloaded book is called out", /partly downloaded/.test(await page.textContent("#upload-preview")));
+  check("offers vBook's reading time for Activity Insights, ticked", await page.isChecked("#vb-history"), (await page.textContent(".vb-history")).trim());
   await page.locator(".vb-action").nth(1).selectOption("skip");
   await page.click("#upload-preview .xp-btn:not(.secondary)");
   await page.waitForFunction(() => /vBook import done/.test(document.querySelector("#upload-status").textContent), null, { timeout: 60000 });
   const summary = await page.textContent("#upload-status");
-  check("summary reports what happened", /1 imported/.test(summary) && /2 skipped/.test(summary), summary.trim());
+  check("summary reports what happened", /1 imported/.test(summary) && /2 skipped/.test(summary) && /45 min reading time/.test(summary), summary.trim());
   const books = await page.evaluate(() => state.books.map((b) => ({ t: b.title, n: b.chapter_count, p: b.progress_idx })));
   check("only the chosen book was created, with vBook's full section list", books.length === 1 && books[0].n === 30, JSON.stringify(books));
   check("and vBook's reading position", books[0] && books[0].p === 12);
@@ -81,8 +83,16 @@ try {
   const text = await page.evaluate(() => monaco.editor.getEditors()[0].getModel().getValue());
   check("the chapter text is vBook's", text.includes("keep1 para 12 one"));
 
-  // Sync & Backup: the vBook card.
+  // Activity Insights counts the phone's reading time under its own name.
   await page.click('.ab-icon[data-view="extensions"]');
+  await page.locator("#ext-list .ext-item", { hasText: "Activity Insights" }).click();
+  await page.waitForSelector(".in-book", { timeout: 10000 });
+  const inBooks = await page.$$eval(".in-book-name", (n) => n.map((x) => x.textContent));
+  check("Activity Insights lists vBook's reading time as vBook (phone)", inBooks.includes("vBook (phone)"), inBooks.join(" | "));
+
+  // Sync & Backup: the vBook card. (Clicking the already-open view's icon would
+  // collapse the side bar, as in VS Code.)
+  if (!(await page.locator("#view-extensions").isVisible())) await page.click('.ab-icon[data-view="extensions"]');
   await page.locator("#ext-list .ext-item", { hasText: "Sync & Backup" }).click();
   await page.waitForSelector("#vbook-positions", { timeout: 10000 });
   const card = await page.textContent("#vbook-card");

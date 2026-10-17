@@ -484,6 +484,8 @@ Mặc định ở mục 13.5 được dùng: sách đã có thì **giữ bản �
 - **Tải thêm chương bên vBook rồi nhập lại:** sách nhập từ vBook mà bản sao lưu mới có nhiều chương có chữ hơn, hoặc mục lục dài thêm (truyện đang ra), mặc định là *Update content*: thay nội dung **tại chỗ**, giữ nguyên id sách nên highlight, bookmark và tiến độ không mất; số chương có chữ lưu ở `vbook_downloaded` (migration 0011).
 - **Chưa làm:** bookmark của vBook — cả 14 file `bookmarks.json` trong mẫu đều rỗng nên chưa biết định dạng.
 
+**Thời gian đọc trên điện thoại → Activity Insights.** `read_histories.json` (các phiên đọc, không gắn với sách) được cộng vào biểu đồ hoạt động dưới tên "vBook (phone)", chia theo giờ địa phương của trình duyệt lúc nhập (phiên vắt qua hai giờ được chia đôi). Có ô tick ở bước xem trước; id phiên lưu ở `vbook_sessions` (migration 0012) nên nhập lại không cộng trùng. File thật: 1.123 phiên, 48,2 giờ, 44 ngày (23/07–20/09/2026).
+
 **EPR-20 — app → vBook (đọc sách trên điện thoại).** `/dav/` chỉ đọc (OPTIONS, PROPFIND độ sâu 0/1, GET, HEAD; mọi lệnh ghi 405), Basic auth bằng `DAV_PASSWORD`, giới hạn thử sai như đăng nhập (10 lần/15 phút mỗi nơi), `Cache-Control: private, no-store`. Mỗi sách đã nạp xong là một file `.epub` dựng từ chương đã lưu (dùng chung code xuất EPUB) và cache ở `dav/<id>.epub`; xoá/lập lại chỉ mục thì cache bị xoá.
 
 **EPR-21 — tiến độ về vBook.** Bản sao lưu tối thiểu `vbook_<yyyyMMdd_HHmmss>.tar.zst` (manifest + `books/<id>/book.json` lấy từ bản ghi vBook đã lưu, cập nhật `last_read_chapter_index/_id/_percent/_name` và `last_read`). Tải ở trang Sync & Backup, và cũng nằm trong thư mục WebDAV (tên theo lần đọc mới nhất, nên ổn định giữa hai lần liệt kê).

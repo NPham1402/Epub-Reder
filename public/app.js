@@ -1172,8 +1172,8 @@ async function finishUpload(uploadId) {
 // Uploaded in parts like a book, then read by a server-side job the page
 // polls: a preview pass (one row per book, with a choice for each), then the
 // import. Created books are indexed here exactly like a normal upload.
-async function vbookJob(uploadId, mode, actions, onTick) {
-  const res = await api(`/api/uploads/${uploadId}/vbook`, { method: "POST", body: JSON.stringify({ mode, actions }) }).catch(() => null);
+async function vbookJob(uploadId, mode, actions, onTick, extra = {}) {
+  const res = await api(`/api/uploads/${uploadId}/vbook`, { method: "POST", body: JSON.stringify({ mode, actions, ...extra }) }).catch(() => null);
   if (!res) return { ok: false, error: "could not reach the server" };
   const data = await res.json().catch(() => ({}));
   if (!res.ok) return { ok: false, error: data.error || `HTTP ${res.status}` };
@@ -1190,6 +1190,7 @@ async function vbookJob(uploadId, mode, actions, onTick) {
   }
 }
 
+const fmtHours = (sec) => (sec >= 3600 ? `${Math.floor(sec / 3600)} h ${String(Math.floor((sec % 3600) / 60)).padStart(2, "0")} min` : `${Math.max(1, Math.round(sec / 60))} min`);
 const VBOOK_LABELS = { create: "Import", update: "Update content", progress: "Update position", skip: "Skip" };
 function showVbookPreview(job) {
   return new Promise((resolve) => {
@@ -1197,7 +1198,8 @@ function showVbookPreview(job) {
     box.innerHTML = "";
     box.hidden = false;
     const choices = {};
-    const done = (yes) => { pendingPreview = null; box.hidden = true; resolve(yes ? choices : null); };
+    let addHistory = null;
+    const done = (yes) => { pendingPreview = null; box.hidden = true; resolve(yes ? { choices, history: addHistory ? addHistory.checked : false } : null); };
     pendingPreview = done;
     const when = job.created_at ? new Date(job.created_at).toLocaleString() : "";
     box.appendChild(el("div", "up-title", `vBook backup · ${job.items.length} book${job.items.length === 1 ? "" : "s"}`));
@@ -1227,6 +1229,19 @@ function showVbookPreview(job) {
     }
     box.appendChild(list);
     const partial = job.items.filter((i) => (i.action === "create" || i.action === "update") && i.downloaded < i.chapters).length;
+    const h = job.history;
+    if (h && h.fresh) {
+      const lbl = el("label", "vb-history");
+      addHistory = el("input");
+      addHistory.type = "checkbox";
+      addHistory.checked = true;
+      addHistory.id = "vb-history";
+      lbl.appendChild(addHistory);
+      lbl.appendChild(document.createTextNode(` Add ${h.fresh} reading session${h.fresh === 1 ? "" : "s"} from vBook (${fmtHours(h.fresh_seconds)}) to Activity Insights`));
+      box.appendChild(lbl);
+    } else if (h && h.sessions) {
+      box.appendChild(el("div", "up-sub", "vBook's reading time is already in Activity Insights."));
+    }
     if (partial) box.appendChild(el("div", "up-warn", `! ${partial} book${partial === 1 ? " is" : "s are"} only partly downloaded in vBook; the missing sections are kept as placeholders so section numbers match vBook.`));
     const btns = el("div", "up-btns");
     const yes = el("button", "xp-btn", "Import");
@@ -1262,16 +1277,16 @@ async function importVbookBackup(file) {
     return fail("no books found in this backup");
   }
   status.textContent = `> ${file.name}: choose what to import`;
-  const choices = await showVbookPreview(pre.job);
-  if (!choices) {
+  const picked = await showVbookPreview(pre.job);
+  if (!picked) {
     api(`/api/uploads/${up.uploadId}`, { method: "DELETE" }).catch(() => {});
     status.textContent = "> import cancelled";
     return;
   }
 
-  const imp = await vbookJob(up.uploadId, "import", choices, (j) => {
+  const imp = await vbookJob(up.uploadId, "import", picked.choices, (j) => {
     status.textContent = `> importing … ${j.scanned}/${pre.job.items.length}${j.current ? ` · ${j.current}` : ""}`;
-  });
+  }, { history: picked.history, tz_offset: new Date().getTimezoneOffset() });
   if (!imp.ok) return fail(imp.error);
 
   const toIndex = imp.job.ingest;
@@ -1285,10 +1300,12 @@ async function importVbookBackup(file) {
   }
 
   const count = (a) => imp.job.items.filter((it) => it.action === a).length;
-  status.textContent = `> vBook import done · ${count("create")} imported · ${count("update")} refreshed · ${count("progress")} position${count("progress") === 1 ? "" : "s"} updated · ${count("skip")} skipped`;
+  // The library first, then "done": nothing should still be loading once it says so.
   const list = await api("/api/books").then((r) => r.json());
   state.books = list.books;
   renderTree();
+  const added = imp.job.history && imp.job.history.added ? ` · +${fmtHours(imp.job.history.fresh_seconds)} reading time` : "";
+  status.textContent = `> vBook import done · ${count("create")} imported · ${count("update")} refreshed · ${count("progress")} position${count("progress") === 1 ? "" : "s"} updated · ${count("skip")} skipped${added}`;
 }
 
 async function uploadFile(file) {
