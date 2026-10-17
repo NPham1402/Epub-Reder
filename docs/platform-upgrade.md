@@ -481,6 +481,7 @@ Mặc định ở mục 13.5 được dùng: sách đã có thì **giữ bản �
 - Sách đã có từ nguồn khác: ghép theo tên + tác giả; chương đang đọc tìm theo **tên chương**, không theo số.
 - Tiến độ dùng chung quy tắc với `/progress`: vị trí hiện tại theo đồng hồ mới hơn, "xa nhất" không bao giờ lùi.
 - **Nghiệm thu trên bản sao lưu thật** (48 MB, giải nén 191 MB): 14 sách xem trước; 7 sách có nội dung được nhập (12.121 chương); 7 sách vBook chưa tải chương nào bị bỏ qua (không đọc được, chưa có bản nào để gắn tiến độ). Tiến độ đúng như vBook (vd. Trạch Nhật Phi Thăng chương 973, 11%). Trên máy: upload 3 s, xem trước 1 s, nhập 12,6 s, lập chỉ mục 7,7 s; RAM server tối đa ~385 MB (giới hạn pod 1 GB).
+- **Tải thêm chương bên vBook rồi nhập lại:** sách nhập từ vBook mà bản sao lưu mới có nhiều chương có chữ hơn, hoặc mục lục dài thêm (truyện đang ra), mặc định là *Update content*: thay nội dung **tại chỗ**, giữ nguyên id sách nên highlight, bookmark và tiến độ không mất; số chương có chữ lưu ở `vbook_downloaded` (migration 0011).
 - **Chưa làm:** bookmark của vBook — cả 14 file `bookmarks.json` trong mẫu đều rỗng nên chưa biết định dạng.
 
 **EPR-20 — app → vBook (đọc sách trên điện thoại).** `/dav/` chỉ đọc (OPTIONS, PROPFIND độ sâu 0/1, GET, HEAD; mọi lệnh ghi 405), Basic auth bằng `DAV_PASSWORD`, giới hạn thử sai như đăng nhập (10 lần/15 phút mỗi nơi), `Cache-Control: private, no-store`. Mỗi sách đã nạp xong là một file `.epub` dựng từ chương đã lưu (dùng chung code xuất EPUB) và cache ở `dav/<id>.epub`; xoá/lập lại chỉ mục thì cache bị xoá.

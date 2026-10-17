@@ -45,16 +45,17 @@ try {
   const beforePanic = await pendingSeconds();
   for (let i = 0; i < 3; i++) { await page.mouse.move(500 + i, 320); await page.waitForTimeout(1000); }
   check("nothing is counted behind the cover screen", (await pendingSeconds()) === beforePanic, `${beforePanic} -> ${await pendingSeconds()}`);
-  await page.keyboard.type("unlock");
-  await page.waitForSelector("#panic-editor", { state: "hidden" });
-
-  // Flush and read back
+  // Flush and read back while still covered: nothing is counted then (checked
+  // just above), so no new second can slip in between the flush and the check
+  // — it did on a slow CI runner when this ran after unlocking.
   await page.evaluate(() => actFlush());
   await page.waitForTimeout(400);
   const s = await serverStats();
   const total = s.daily.reduce((a, d) => a + d.seconds, 0);
   check("the batch reaches the server as durations only", total >= 3 && s.per_book.length === 1 && Object.keys(s.daily[0]).sort().join() === "day,seconds", `${total} s`);
   check("and nothing waits to be sent afterwards", (await pendingSeconds()) === 0);
+  await page.keyboard.type("unlock");
+  await page.waitForSelector("#panic-editor", { state: "hidden" });
 
   // Four earlier days of real activity (a day counts toward a streak from one minute on).
   await page.evaluate(async () => {

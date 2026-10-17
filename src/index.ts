@@ -597,10 +597,10 @@ app.post("/api/uploads/:id/complete", async (c) => {
 // "preview" lists the books and what would happen to each; "import" applies
 // the reader's choices. A created book is registered like any upload and the
 // page then drives its /ingest-chunk to completion, as for a normal import.
-type VbookAction = "create" | "progress" | "skip";
+type VbookAction = "create" | "update" | "progress" | "skip";
 interface VbookRow {
   id: string; title: string; author: string | null; code_name: string; chapter_count: number;
-  vbook_id: string | null; ingest_done: number;
+  vbook_id: string | null; ingest_done: number; vbook_downloaded: number | null;
 }
 interface VbookItem {
   vbook_id: string; title: string; author: string | null; source: string | null;
@@ -636,8 +636,14 @@ function planVbook(b: VbookBook, rows: VbookRow[]): VbookItem {
   const byName = byId ? undefined : rows.find((r) =>
     !r.vbook_id && sameTitle(r.title, b.title) && (!r.author || !b.author || sameTitle(r.author, b.author)));
   const match = byId ?? byName;
+  // A vBook book downloaded further (or whose novel grew) since the last
+  // import: refresh its text in place (same book, so highlights, bookmarks and
+  // position stay) rather than only moving the position.
+  const grew = !!byId && b.downloaded > 0 && (b.downloaded > (byId.vbook_downloaded ?? 0) || b.toc.length > byId.chapter_count);
   const options: VbookAction[] = [];
+  if (grew) options.push("update");
   if (match) options.push("progress");
+  if (byId && !grew && b.downloaded > 0) options.push("update");
   if (!byId && b.downloaded > 0) options.push("create");
   options.push("skip");
   return {
@@ -664,10 +670,40 @@ async function vbookChapterIdx(env: Env, row: VbookRow, b: VbookBook): Promise<n
   return hit ? hit.idx : null;
 }
 
+// New text for an existing book, keeping its id (and so its highlights,
+// bookmarks and position): the same steps as /reindex, plus the new raw EPUB
+// and its spine. The page then indexes it like a fresh upload.
+async function replaceBookContent(env: Env, id: string, bytes: Uint8Array): Promise<string | null> {
+  if (busyBooks.has(id)) return "another operation is running for this book";
+  busyBooks.add(id);
+  try {
+    const meta = parseEpubMeta(bytes);
+    const book = await env.DB.prepare(`SELECT r2_key, ingest_upload_id FROM books WHERE id = ?`)
+      .bind(id).first<{ r2_key: string; ingest_upload_id: string | null }>();
+    if (!book) return "the book is gone";
+    await abortIngest(env, id, book.ingest_upload_id);
+    await env.BOOKS.put(book.r2_key, bytes, { httpMetadata: { contentType: "application/epub+zip" } });
+    await env.BOOKS.put(spineMetaKey(id), JSON.stringify({ spine: meta.spine, toc: [...meta.tocMap.entries()] }),
+      { httpMetadata: { contentType: "application/json" } });
+    await env.DB.prepare(`DELETE FROM chapters WHERE book_id = ?`).bind(id).run();
+    await dropSearchIndex(env, id);
+    await env.DB.prepare(
+      `UPDATE books SET chapter_count = ?, ingest_done = 0, ingest_upload_id = NULL, ingest_part_number = 1,
+         ingest_offset = 0, ingest_parts_json = '[]' WHERE id = ?`,
+    ).bind(meta.spine.length, id).run();
+    await env.BOOKS.delete([legacyContentKey(id), davEpubKey(id)]);
+    return null;
+  } catch (err) {
+    return errMsg(err);
+  } finally {
+    busyBooks.delete(id);
+  }
+}
+
 async function runVbookJob(env: Env, job: VbookJob, parts: number, choices: Record<string, string>): Promise<void> {
   const unzstd = env.VBOOK_UNZSTD!;
   const { results: rows } = await env.DB.prepare(
-    `SELECT id, title, author, code_name, chapter_count, vbook_id, ingest_done FROM books`,
+    `SELECT id, title, author, code_name, chapter_count, vbook_id, ingest_done, vbook_downloaded FROM books`,
   ).all<VbookRow>();
   const want = (it: VbookItem): VbookAction => {
     const c = choices[it.vbook_id] as VbookAction | undefined;
@@ -680,7 +716,8 @@ async function runVbookJob(env: Env, job: VbookJob, parts: number, choices: Reco
   if (job.mode === "import") {
     only = new Set<string>();
     await readVbookBackup(unzstd(uploadedBytes(env, job.uploadId, parts)), async (b) => {
-      if (want(planVbook(b, rows)) === "create") only!.add(b.id);
+      const a = want(planVbook(b, rows));
+      if (a === "create" || a === "update") only!.add(b.id);
     }, { withContent: false });
   }
 
@@ -694,23 +731,40 @@ async function runVbookJob(env: Env, job: VbookJob, parts: number, choices: Reco
 
     if (item.action === "skip") { item.outcome = "skipped"; return; }
 
-    if (item.action === "create") {
-      const last = Math.max(b.toc.length, ...[...b.contents.keys()].map((k) => k + 1));
-      const chapters = Array.from({ length: last }, (_, pos) => ({
+    const last = Math.max(b.toc.length, ...[...b.contents.keys()].map((k) => k + 1));
+    const vbookEpub = () => buildEpub({
+      title: b.title, author: b.author, language: b.language,
+      chapters: Array.from({ length: last }, (_, pos) => ({
         title: b.toc[pos] || `Chapter ${pos + 1}`,
         blocks: (b.contents.get(pos) ?? [VBOOK_MISSING]).map((text) => ({ type: "p", text })),
-      }));
-      const r = await createBookFromBytes(env, buildEpub({ title: b.title, author: b.author, language: b.language, chapters }));
+      })),
+    });
+
+    if (item.action === "update") {
+      const row = rows.find((r) => r.id === item.match!.id)!;
+      const err = await replaceBookContent(env, row.id, vbookEpub());
+      if (err) { item.outcome = `error: ${err}`; return; }
+      await env.DB.prepare(`UPDATE books SET vbook_json = ?, vbook_downloaded = ? WHERE id = ?`)
+        .bind(JSON.stringify(b.meta), b.downloaded, row.id).run();
+      row.chapter_count = last;
+      job.ingest.push({ id: row.id, code_name: row.code_name, title: row.title, total: last });
+      if (b.progress) await upsertProgress(env, row.id, Math.min(b.progress.idx, last - 1), b.progress.ratio, clampTs(b.progress.at));
+      item.outcome = `content updated (${b.downloaded}/${last} sections with text)`;
+      return;
+    }
+
+    if (item.action === "create") {
+      const r = await createBookFromBytes(env, vbookEpub());
       if (r.status !== 200) { item.outcome = `error: ${String(r.body.error ?? r.status)}`; return; }
       const id = r.body.id as string;
-      await env.DB.prepare(`UPDATE books SET vbook_id = ?, vbook_json = ? WHERE id = ?`)
-        .bind(b.id, JSON.stringify(b.meta), id).run();
-      const row: VbookRow = { id, title: b.title, author: b.author, code_name: r.body.code_name as string, chapter_count: chapters.length, vbook_id: b.id, ingest_done: 0 };
+      await env.DB.prepare(`UPDATE books SET vbook_id = ?, vbook_json = ?, vbook_downloaded = ? WHERE id = ?`)
+        .bind(b.id, JSON.stringify(b.meta), b.downloaded, id).run();
+      const row: VbookRow = { id, title: b.title, author: b.author, code_name: r.body.code_name as string, chapter_count: last, vbook_id: b.id, ingest_done: 0, vbook_downloaded: b.downloaded };
       rows.push(row);
       item.match = { id, code_name: row.code_name, title: b.title, by: "vbook" };
-      job.ingest.push({ id, code_name: row.code_name, title: b.title, total: chapters.length });
-      if (b.progress) await upsertProgress(env, id, Math.min(b.progress.idx, chapters.length - 1), b.progress.ratio, clampTs(b.progress.at));
-      item.outcome = `created (${b.downloaded}/${chapters.length} sections with text)`;
+      job.ingest.push({ id, code_name: row.code_name, title: b.title, total: last });
+      if (b.progress) await upsertProgress(env, id, Math.min(b.progress.idx, last - 1), b.progress.ratio, clampTs(b.progress.at));
+      item.outcome = `created (${b.downloaded}/${last} sections with text)`;
       return;
     }
 

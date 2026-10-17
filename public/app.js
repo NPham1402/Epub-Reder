@@ -1190,7 +1190,7 @@ async function vbookJob(uploadId, mode, actions, onTick) {
   }
 }
 
-const VBOOK_LABELS = { create: "Import", progress: "Update position", skip: "Skip" };
+const VBOOK_LABELS = { create: "Import", update: "Update content", progress: "Update position", skip: "Skip" };
 function showVbookPreview(job) {
   return new Promise((resolve) => {
     const box = $("#upload-preview");
@@ -1226,7 +1226,7 @@ function showVbookPreview(job) {
       list.appendChild(row);
     }
     box.appendChild(list);
-    const partial = job.items.filter((i) => i.action === "create" && i.downloaded < i.chapters).length;
+    const partial = job.items.filter((i) => (i.action === "create" || i.action === "update") && i.downloaded < i.chapters).length;
     if (partial) box.appendChild(el("div", "up-warn", `! ${partial} book${partial === 1 ? " is" : "s are"} only partly downloaded in vBook; the missing sections are kept as placeholders so section numbers match vBook.`));
     const btns = el("div", "up-btns");
     const yes = el("button", "xp-btn", "Import");
@@ -1285,7 +1285,7 @@ async function importVbookBackup(file) {
   }
 
   const count = (a) => imp.job.items.filter((it) => it.action === a).length;
-  status.textContent = `> vBook import done · ${count("create")} imported · ${count("progress")} position${count("progress") === 1 ? "" : "s"} updated · ${count("skip")} skipped`;
+  status.textContent = `> vBook import done · ${count("create")} imported · ${count("update")} refreshed · ${count("progress")} position${count("progress") === 1 ? "" : "s"} updated · ${count("skip")} skipped`;
   const list = await api("/api/books").then((r) => r.json());
   state.books = list.books;
   renderTree();

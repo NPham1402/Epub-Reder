@@ -209,6 +209,35 @@ describe("vBook backup import (server)", () => {
     assert.equal(p.chapter_idx, 2, "the newer position (by vBook's own clock) wins");
   });
 
+  test("downloaded more in vBook (and the novel grew): content refreshed in place, nothing else lost", async () => {
+    const list = (await (await api(srv.base, cookie, "/api/books")).json()) as { books: { id: string; title: string }[] };
+    const partialId = list.books.find((b) => b.title === PARTIAL.name)!.id;
+    await api(srv.base, cookie, `/api/books/${partialId}/bookmarks`, {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ chapter_idx: 0, p: 0, snippet: "x" }),
+    });
+    const grown: FakeBook = { ...PARTIAL, toc: [...PARTIAL.toc, "C5"], have: [0, 1, 2, 3, 4], read: [4, 0.3, T + 5000] };
+    const id = await sendBackup(srv.base, cookie, backup([grown]));
+    const pre = await runJob(srv.base, cookie, id, "preview");
+    assert.equal(item(pre, PARTIAL.id).action, "update");
+    assert.deepEqual(item(pre, PARTIAL.id).options, ["update", "progress", "skip"]);
+    const imp = await runJob(srv.base, cookie, id, "import");
+    assert.equal(imp.ingest.length, 1);
+    assert.equal(imp.ingest[0].id, partialId, "same book, not a new one");
+    await ingestAll(srv.base, cookie, partialId);
+    const idx = (await (await api(srv.base, cookie, `/api/books/${partialId}/index`)).json()) as { chapters: unknown[]; progress: { chapter_idx: number } };
+    assert.equal(idx.chapters.length, 5);
+    assert.equal(idx.progress.chapter_idx, 4);
+    const ch1 = ((await (await api(srv.base, cookie, `/api/books/${partialId}/chapters/1`)).json()) as { blocks: { text: string }[] }).blocks.map((b) => b.text);
+    assert.ok(ch1.includes(`${PARTIAL.id}-p1-b`), "a chapter that was a placeholder now has its text");
+    const bms = (await (await api(srv.base, cookie, "/api/bookmarks")).json()) as { bookmarks: { book_id: string }[] };
+    assert.equal(bms.bookmarks.filter((b) => b.book_id === partialId).length, 1, "bookmarks survive");
+
+    // Same backup again: nothing new, so only the position is touched.
+    const id2 = await sendBackup(srv.base, cookie, backup([grown]));
+    assert.equal(item(await runJob(srv.base, cookie, id2, "preview"), PARTIAL.id).action, "progress");
+    await api(srv.base, cookie, `/api/uploads/${id2}`, { method: "DELETE" });
+  });
+
   test("the reader's choice overrides the default", async () => {
     const other: FakeBook = { ...FULL, id: "eee555", name: "Another Book" };
     const id = await sendBackup(srv.base, cookie, backup([other]));
