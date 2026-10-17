@@ -61,6 +61,12 @@ export async function* tarEntries(src: AsyncIterable<Uint8Array>): AsyncGenerato
 }
 
 export interface VbookProgress { idx: number; ratio: number; at: number; chapter: string | null }
+// A bookmark/highlight from books/<id>/bookmarks.json. Field names come from
+// vBook's own serializer (SyncBookmark: chapter_index, chapter_name, content,
+// description, start/end_position, create_at; older backups: chap_index,
+// title/name, position, timestamp). The sample backup had none, so parsing
+// is deliberately lenient.
+export interface VbookBookmark { chapter: number; chapterName: string | null; content: string; note: string; at: number }
 export interface VbookBook {
   id: string;
   title: string;
@@ -71,6 +77,7 @@ export interface VbookBook {
   downloaded: number;                     // chapters with text in the backup
   contents: Map<number, string[]>;        // position -> paragraphs (only when asked for)
   progress: VbookProgress | null;
+  bookmarks: VbookBookmark[];
   meta: Record<string, unknown>;          // book.json without the long description
 }
 export interface VbookManifest { device_name?: string; backup_version?: number; create_at?: number }
@@ -103,6 +110,7 @@ export function chapterParagraphs(html: string, title: string): string[] {
 }
 
 interface Pending {
+  bookmarks: VbookBookmark[];
   meta: Record<string, unknown> | null;
   toc: { title: string; position: number }[] | null;
   contents: Map<number, string>;
@@ -126,6 +134,7 @@ function finish(id: string, p: Pending, withContent: boolean): VbookBook | null 
     toc,
     downloaded: p.downloaded,
     contents,
+    bookmarks: p.bookmarks,
     progress: Number.isFinite(idx) && idx >= 0 && Number.isFinite(at) && at > 0
       ? { idx, ratio: Math.min(1, Math.max(0, Number(m.last_read_chapter_percent) || 0)), at, chapter: typeof m.last_read_chapter_name === "string" ? m.last_read_chapter_name : null }
       : null,
@@ -179,10 +188,11 @@ export async function readVbookBackup(
       await flush();
       if (finished.has(id)) throw new Error("unexpected backup layout: a book's files are split up");
       curId = id;
-      cur = { meta: null, toc: null, contents: new Map(), downloaded: 0 };
+      cur = { meta: null, toc: null, contents: new Map(), downloaded: 0, bookmarks: [] };
     }
     const keep = opts.withContent && (!opts.only || opts.only.has(id));
     if (rest === "book.json") cur!.meta = json(e.data) as Record<string, unknown>;
+    else if (rest === "bookmarks.json") cur!.bookmarks = parseBookmarks(json(e.data));
     else if (rest === "toc_links.json") {
       const list = json(e.data);
       cur!.toc = Array.isArray(list) ? list.map((t, i) => ({ title: raw((t as { title?: unknown }).title) || `Chapter ${i + 1}`, position: Number((t as { position?: unknown }).position ?? i) })) : [];
@@ -290,4 +300,39 @@ export function vbookBackupName(ms: number): string {
   const d = new Date(ms);
   const p = (n: number) => String(n).padStart(2, "0");
   return `vbook_${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}_${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}.tar.zst`;
+}
+
+function parseBookmarks(list: unknown): VbookBookmark[] {
+  if (!Array.isArray(list)) return [];
+  return list.flatMap((raw) => {
+    if (!raw || typeof raw !== "object") return [];
+    const x = raw as Record<string, unknown>;
+    const chapter = Number(x.chapter_index ?? x.chap_index);
+    if (!Number.isInteger(chapter) || chapter < 0) return [];
+    const str = (k: unknown) => (typeof k === "string" ? k : "");
+    const at = Number(x.create_at ?? x.timestamp);
+    return [{
+      chapter,
+      chapterName: str(x.chapter_name ?? x.title ?? x.name) || null,
+      content: str(x.content).replace(/\s+/g, " ").trim(),
+      note: str(x.description).trim(),
+      at: Number.isFinite(at) && at > 0 ? at : 0,
+    }];
+  });
+}
+
+// Which paragraph a bookmark's text sits in (vBook stores character offsets
+// into its own rendering of the chapter, which this app doesn't reproduce, so
+// the text itself is the anchor). -1 when it can't be found.
+export function findParagraph(paras: string[], content: string): number {
+  const norm = (s: string) => s.normalize("NFC").replace(/\s+/g, " ").trim().toLowerCase();
+  const c = norm(content);
+  if (!c) return -1;
+  const ps = paras.map(norm);
+  for (const probe of [c.slice(0, 60), c.slice(0, 25)]) {
+    if (probe.length < 4) continue;
+    const i = ps.findIndex((p) => p.includes(probe));
+    if (i >= 0) return i;
+  }
+  return -1;
 }

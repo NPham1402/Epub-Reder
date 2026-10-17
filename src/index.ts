@@ -15,7 +15,7 @@ import {
   abortIngest, busyBooks, contentBinKey, legacyContentKey, spineMetaKey, stagedKey, stagedPrefix, uploadPartKey, uploadPrefix,
 } from "./storage";
 import { discardUploadParts } from "./maintenance";
-import { buildProgressBackup, readVbookBackup, sameTitle, sessionBuckets, vbookBackupName, type VbookBook } from "./vbook";
+import { buildProgressBackup, findParagraph, readVbookBackup, sameTitle, sessionBuckets, vbookBackupName, type VbookBook } from "./vbook";
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 const MAX_EPUB_BYTES = 80 * 1024 * 1024; // 80 MB guard
@@ -604,7 +604,7 @@ interface VbookRow {
 }
 interface VbookItem {
   vbook_id: string; title: string; author: string | null; source: string | null;
-  chapters: number; downloaded: number;
+  chapters: number; downloaded: number; bookmarks: number;
   progress: { chapter: number; ratio: number; at: number; name: string | null } | null;
   match: { id: string; code_name: string; title: string; by: "vbook" | "title" } | null;
   options: VbookAction[]; action: VbookAction;
@@ -650,7 +650,7 @@ function planVbook(b: VbookBook, rows: VbookRow[]): VbookItem {
   options.push("skip");
   return {
     vbook_id: b.id, title: b.title, author: b.author, source: b.source,
-    chapters: b.toc.length, downloaded: b.downloaded,
+    chapters: b.toc.length, downloaded: b.downloaded, bookmarks: b.bookmarks.length,
     progress: b.progress ? { chapter: b.progress.idx, ratio: b.progress.ratio, at: b.progress.at, name: b.progress.chapter } : null,
     match: match ? { id: match.id, code_name: match.code_name, title: match.title, by: byId ? "vbook" : "title" } : null,
     // Defaults (§13.5): a book that is already here keeps its copy, only its
@@ -700,6 +700,41 @@ async function replaceBookContent(env: Env, id: string, bytes: Uint8Array): Prom
   } finally {
     busyBooks.delete(id);
   }
+}
+
+// vBook bookmarks -> this app's bookmarks (one per paragraph, same rule as the
+// route). The paragraph is found by the bookmarked text. fresh = the book's
+// text is the one just built from this backup (chapter blocks are the
+// chapter's paragraphs behind one heading); otherwise the stored text is read.
+async function vbookBookmarks(env: Env, row: VbookRow, b: VbookBook, fresh: boolean): Promise<string> {
+  if (!b.bookmarks.length) return "";
+  const own = row.vbook_id === b.id;
+  let titles: { idx: number; title: string | null }[] | null = null;
+  let added = 0;
+  for (const bm of b.bookmarks) {
+    let idx: number | null = own && bm.chapter < row.chapter_count ? bm.chapter : null;
+    if (idx === null && !own) {
+      titles ??= (await env.DB.prepare(`SELECT idx, title FROM chapters WHERE book_id = ? ORDER BY idx`).bind(row.id).all<{ idx: number; title: string | null }>()).results;
+      const name = bm.chapterName ?? b.toc[bm.chapter];
+      idx = titles.find((t) => sameTitle(t.title, name))?.idx ?? null;
+    }
+    if (idx === null) continue;
+    let p = 0;
+    if (fresh) {
+      const at = findParagraph(b.contents.get(bm.chapter) ?? [], bm.content);
+      if (at >= 0) p = at + 1;
+    } else {
+      const ch = await env.DB.prepare(`SELECT idx, title, file_name, byte_offset, byte_length, blocks FROM chapters WHERE book_id = ? AND idx = ?`)
+        .bind(row.id, idx).first<{ idx: number; title: string | null; file_name: string; byte_offset: number | null; byte_length: number | null; blocks: string | null }>();
+      if (ch) p = Math.max(0, findParagraph((await readBlocks(env, row.id, ch)).map((x) => x.text), bm.content));
+    }
+    const dup = await env.DB.prepare(`SELECT 1 AS ok FROM bookmarks WHERE book_id = ? AND chapter_idx = ? AND p = ?`).bind(row.id, idx, p).first();
+    if (dup) continue;
+    await env.DB.prepare(`INSERT INTO bookmarks (id, book_id, chapter_idx, p, snippet, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+      .bind(crypto.randomUUID(), row.id, idx, p, (bm.content || bm.chapterName || "").slice(0, 120), bm.note.slice(0, 500), bm.at || Date.now()).run();
+    added++;
+  }
+  return added ? ` · ${added} bookmark${added === 1 ? "" : "s"}` : "";
 }
 
 async function runVbookJob(
@@ -753,7 +788,7 @@ async function runVbookJob(
       row.chapter_count = last;
       job.ingest.push({ id: row.id, code_name: row.code_name, title: row.title, total: last });
       if (b.progress) await upsertProgress(env, row.id, Math.min(b.progress.idx, last - 1), b.progress.ratio, clampTs(b.progress.at));
-      item.outcome = `content updated (${b.downloaded}/${last} sections with text)`;
+      item.outcome = `content updated (${b.downloaded}/${last} sections with text)` + await vbookBookmarks(env, row, b, true);
       return;
     }
 
@@ -768,20 +803,26 @@ async function runVbookJob(
       item.match = { id, code_name: row.code_name, title: b.title, by: "vbook" };
       job.ingest.push({ id, code_name: row.code_name, title: b.title, total: last });
       if (b.progress) await upsertProgress(env, id, Math.min(b.progress.idx, last - 1), b.progress.ratio, clampTs(b.progress.at));
-      item.outcome = `created (${b.downloaded}/${last} sections with text)`;
+      item.outcome = `created (${b.downloaded}/${last} sections with text)` + await vbookBookmarks(env, row, b, true);
       return;
     }
 
     // progress only
     const row = rows.find((r) => r.id === item.match!.id)!;
+    // Keep the snapshot of vBook's own record current: the positions backup
+    // (EPR-21) is built from it and compared against its last_read.
+    if (row.vbook_id === b.id) {
+      await env.DB.prepare(`UPDATE books SET vbook_json = ? WHERE id = ?`).bind(JSON.stringify(b.meta), row.id).run();
+    }
     if (row.vbook_id === b.id && !row.ingest_done) {
       // Created by an earlier import whose indexing never finished: finish it now.
       job.ingest.push({ id: row.id, code_name: row.code_name, title: row.title, total: row.chapter_count });
     }
+    const marks = await vbookBookmarks(env, row, b, false);
     const idx = await vbookChapterIdx(env, row, b);
-    if (idx === null) { item.outcome = b.progress ? "progress not applied: vBook's chapter was not found in this copy" : "no reading position in vBook"; return; }
+    if (idx === null) { item.outcome = (b.progress ? "progress not applied: vBook's chapter was not found in this copy" : "no reading position in vBook") + marks; return; }
     await upsertProgress(env, row.id, idx, b.progress!.ratio, clampTs(b.progress!.at));
-    item.outcome = `progress: section ${idx + 1}`;
+    item.outcome = `progress: section ${idx + 1}` + marks;
   }, { withContent: job.mode === "import", only });
 
   job.device = manifest?.device_name ?? null;
@@ -1424,41 +1465,47 @@ async function exportInput(
 // --- Reading positions back to vBook (EPR-21) ----------------------------------
 // A minimal vBook backup holding only the book records of books that came from
 // vBook, with this app's reading position. Restored in vBook's "merge" mode.
-async function progressBackup(env: Env): Promise<{ name: string; bytes: Uint8Array } | null> {
-  if (!env.VBOOK_ZSTD) return null;
+// Only books read further here than vBook knows (its last_read in the record
+// from the newest imported backup). vBook's merge restore replaces the whole
+// book record, so including a book read further on the phone since would drag
+// vBook's position backwards.
+async function vbookPositionsAhead(env: Env) {
   const { results } = await env.DB.prepare(
     `SELECT b.vbook_id, b.vbook_json, p.chapter_idx, p.scroll_ratio, p.client_ts, p.updated_at,
             (SELECT title FROM chapters ch WHERE ch.book_id = b.id AND ch.idx = p.chapter_idx) AS chapter_title
      FROM books b JOIN progress p ON p.book_id = b.id
      WHERE b.vbook_id IS NOT NULL AND b.vbook_json IS NOT NULL`,
   ).all<{ vbook_id: string; vbook_json: string; chapter_idx: number; scroll_ratio: number; client_ts: number | null; updated_at: number; chapter_title: string | null }>();
-  if (!results.length) return null;
-  // Named and stamped after the newest reading position, so the WebDAV listing
-  // shows the same file name until a position actually changes.
-  const latest = Math.max(...results.map((r) => r.client_ts || r.updated_at));
-  const { name, tar } = buildProgressBackup(results.map((r) => ({
+  return results.map((r) => ({
     vbook_id: r.vbook_id,
     meta: (safeParse(r.vbook_json) as Record<string, unknown>) ?? {},
     chapter_idx: r.chapter_idx,
     ratio: r.scroll_ratio,
     at: r.client_ts || r.updated_at,
     chapter_title: r.chapter_title,
-  })), latest);
+  })).filter((x) => x.at > (Number(x.meta.last_read) || 0));
+}
+
+async function progressBackup(env: Env): Promise<{ name: string; bytes: Uint8Array } | null> {
+  if (!env.VBOOK_ZSTD) return null;
+  const items = await vbookPositionsAhead(env);
+  if (!items.length) return null;
+  // Named and stamped after the newest reading position, so the WebDAV listing
+  // shows the same file name until a position actually changes.
+  const { name, tar } = buildProgressBackup(items, Math.max(...items.map((x) => x.at)));
   return { name, bytes: env.VBOOK_ZSTD(tar) };
 }
 
 app.get("/api/vbook/status", async (c) => {
-  const r = await c.env.DB.prepare(
-    `SELECT COUNT(*) AS n, SUM(CASE WHEN p.book_id IS NULL THEN 0 ELSE 1 END) AS positions
-     FROM books b LEFT JOIN progress p ON p.book_id = b.id WHERE b.vbook_id IS NOT NULL`,
-  ).first<{ n: number; positions: number | null }>();
-  return c.json({ import: !!c.env.VBOOK_UNZSTD, dav: !!c.env.DAV_PASSWORD, books: r?.n ?? 0, positions: r?.positions ?? 0 });
+  const r = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM books WHERE vbook_id IS NOT NULL`).first<{ n: number }>();
+  const ahead = await vbookPositionsAhead(c.env);
+  return c.json({ import: !!c.env.VBOOK_UNZSTD, dav: !!c.env.DAV_PASSWORD, books: r?.n ?? 0, positions: ahead.length });
 });
 
 app.get("/api/vbook/progress-backup", async (c) => {
   if (!c.env.VBOOK_ZSTD) return c.json({ error: "only available on the self-hosted server" }, 501);
   const b = await progressBackup(c.env);
-  if (!b) return c.json({ error: "no book imported from vBook has a reading position yet" }, 404);
+  if (!b) return c.json({ error: "no book from vBook has been read further here than in vBook's last backup" }, 404);
   return new Response(b.bytes as unknown as BodyInit, {
     headers: { "content-type": "application/zstd", "content-disposition": `attachment; filename="${b.name}"` },
   });
@@ -1509,11 +1556,11 @@ async function davListing(env: Env): Promise<DavFile[]> {
     return { name, size: sizes.get(davEpubKey(b.id)) ?? null, type: "application/epub+zip", modified: b.created_at, book: b };
   });
   if (env.VBOOK_ZSTD) {
-    const row = await env.DB.prepare(
-      `SELECT MAX(COALESCE(p.client_ts, p.updated_at)) AS at FROM books b JOIN progress p ON p.book_id = b.id
-       WHERE b.vbook_id IS NOT NULL AND b.vbook_json IS NOT NULL`,
-    ).first<{ at: number | null }>();
-    if (row?.at) files.push({ name: vbookBackupName(row.at), size: null, type: "application/zstd", modified: row.at, backup: true });
+    const ahead = await vbookPositionsAhead(env);
+    if (ahead.length) {
+      const at = Math.max(...ahead.map((x) => x.at));
+      files.push({ name: vbookBackupName(at), size: null, type: "application/zstd", modified: at, backup: true });
+    }
   }
   return files;
 }

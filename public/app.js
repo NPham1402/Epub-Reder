@@ -930,9 +930,15 @@ function restoreScroll(key, book, idx) {
     updatePos();
     paintFocus();
     // Opening a chapter is itself progress (other devices resume from it), even
-    // if the reader never scrolls.
+    // if the reader never scrolls — and even if they switch to an extension tab
+    // before the save fires (that clears state.current; the open must still count).
     clearTimeout(state.saveTimer);
-    state.saveTimer = setTimeout(() => saveProgress(view.ratio), 700);
+    const opened = state.current;
+    const openedRatio = view.ratio;
+    state.saveTimer = setTimeout(() => {
+      if (state.current === opened) saveProgress(view.ratio);
+      else if (opened) sendProgress(opened.bookId, { chapter_idx: opened.idx, scroll_ratio: openedRatio, client_ts: Date.now() });
+    }, 700);
   };
   requestAnimationFrame(apply);
 }

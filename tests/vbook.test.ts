@@ -8,7 +8,7 @@ import { randomBytes } from "node:crypto";
 import { zstdCompressSync } from "node:zlib";
 import { api, cleanup, ingestAll, login, makeEpub, startServer, upload, type TestServer } from "./helpers.ts";
 import { putPart, startUpload } from "./upload-helpers.ts";
-import { chapterParagraphs, readVbookBackup, sessionBuckets, tarEntries } from "../src/vbook.ts";
+import { chapterParagraphs, findParagraph, readVbookBackup, sessionBuckets, tarEntries } from "../src/vbook.ts";
 
 // ---- a tiny ustar writer -------------------------------------------------------
 function tar(files: [string, string | Uint8Array][]): Uint8Array {
@@ -42,7 +42,7 @@ function tar(files: [string, string | Uint8Array][]): Uint8Array {
 const chapterHtml = (title: string, paras: string[]) =>
   `<body>\n ${title.replace(" - ", ": ")}\n <br>\n <br>\n ${paras.join("\n <br>\n <br>\n ")}\n</body>`;
 
-interface FakeBook { id: string; name: string; author: string; toc: string[]; have: number[]; read?: [number, number, number, string?] }
+interface FakeBook { id: string; name: string; author: string; toc: string[]; have: number[]; read?: [number, number, number, string?]; marks?: Record<string, unknown>[] }
 function fakeBook(b: FakeBook): [string, string][] {
   const read = b.read ?? [0, 0, 0];
   const files: [string, string][] = [
@@ -53,7 +53,7 @@ function fakeBook(b: FakeBook): [string, string][] {
       last_read_chapter_name: read[3] ?? b.toc[read[0]], total_chapter: b.toc.length,
     })],
     [`books/${b.id}/toc_links.json`, JSON.stringify(b.toc.map((t, i) => ({ id: `${b.id}_${i}`, title: { raw: t }, position: i })))],
-    [`books/${b.id}/bookmarks.json`, "[]"],
+    [`books/${b.id}/bookmarks.json`, JSON.stringify(b.marks ?? [])],
   ];
   for (const pos of b.have) {
     files.push([`books/${b.id}/contents/${b.id}_${pos}/raw.txt`, chapterHtml(b.toc[pos], [`${b.id}-p${pos}-a &amp; <i>nghiêng</i>`, `${b.id}-p${pos}-b`])]);
@@ -298,8 +298,13 @@ describe("WebDAV for vBook + positions back to vBook", () => {
     const xml = await res.text();
     assert.match(xml, /<d:href>\/dav\/<\/d:href>/);
     assert.match(xml, new RegExp(`<d:href>/dav/${encodeURIComponent("Trạch Nhật Phi Thăng.epub")}</d:href>`));
-    const backupName = xml.match(/vbook_\d{8}_\d{6}\.tar\.zst/)?.[0];
-    assert.ok(backupName, "positions backup is listed");
+    assert.ok(!/vbook_\d{8}_\d{6}\.tar\.zst/.test(xml), "right after an import vBook already has this position: nothing to send back");
+    await api(srv.base, cookie, `/api/books/${bookId}/progress`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chapter_idx: 2, scroll_ratio: 0.1, client_ts: T + 50_000 }),
+    });
+    const backupName = (await (await propfind("/dav/")).text()).match(/vbook_\d{8}_\d{6}\.tar\.zst/)?.[0];
+    assert.ok(backupName, "read further here: the positions backup is listed");
     const again = await (await propfind("/dav/")).text();
     assert.ok(again.includes(backupName!), "same name on the next listing (vBook lists, then downloads)");
     const depth0 = await (await propfind("/dav/", "0")).text();
@@ -349,6 +354,80 @@ describe("WebDAV for vBook + positions back to vBook", () => {
     assert.equal(rec.name.raw, FULL.name, "vBook's other fields are kept as they were");
     assert.equal(rec.description, undefined);
     assert.equal(JSON.parse(files.get("manifest.json")!).backup_version, 1);
+  });
+
+  test("talks the way vBook's own WebDAV client does (webdav-jvm: DEPTH header, allprop body, namespaced XML)", async () => {
+    // Requests shaped like vBook's PropFindCommand; replies read with a
+    // namespace-aware XML parse, the way its MultiStatusReader (ksoup) does.
+    const ALLPROP = `<d:propfind xmlns:d="DAV:">\n  <d:allprop/>\n</d:propfind>`;
+    const auth = { authorization: "Basic " + Buffer.from(`phone-user:${DAV}`).toString("base64") };
+    const propfind = (url: string, depth: string) =>
+      fetch(url, { method: "PROPFIND", headers: { DEPTH: depth, "Content-Type": "application/xml; charset=UTF-8", ...auth }, body: ALLPROP });
+    type Res = { href: string; props: Record<string, string>; collection: boolean; status: string };
+    const parse = (xml: string): Res[] => {
+      // Resolve prefixes from xmlns declarations instead of assuming "d:".
+      const ns = new Map<string, string>();
+      for (const m of xml.matchAll(/xmlns:(\w+)="([^"]+)"/g)) ns.set(m[1], m[2]);
+      const dav = [...ns].find(([, uri]) => uri === "DAV:")?.[0];
+      assert.ok(dav, "DAV: namespace declared");
+      const tag = (t: string) => new RegExp(`<${dav}:${t}>([\\s\\S]*?)</${dav}:${t}>`, "g");
+      return [...xml.matchAll(tag("response"))].map(([, r]) => {
+        const props: Record<string, string> = {};
+        for (const p of ["displayname", "getcontentlength", "getcontenttype", "getlastmodified", "getetag"]) {
+          const m = r.match(new RegExp(`<${dav}:${p}>([^<]*)</${dav}:${p}>`));
+          if (m) props[p] = m[1];
+        }
+        return {
+          href: r.match(new RegExp(`<${dav}:href>([^<]*)</${dav}:href>`))![1],
+          props,
+          collection: new RegExp(`<${dav}:collection/>`).test(r),
+          status: r.match(new RegExp(`<${dav}:status>([^<]*)</${dav}:status>`))![1],
+        };
+      });
+    };
+
+    // vBook asks for the folder the user typed — with or without the slash.
+    for (const base of [`${srv.base}/dav/`, `${srv.base}/dav`]) {
+      const res = await propfind(base, "1");
+      assert.equal(res.status, 207, base);
+      const items = parse(await res.text());
+      assert.ok(items.every((i) => /^HTTP\/1\.1 200/.test(i.status)));
+      const folder = items.find((i) => i.collection)!;
+      assert.equal(folder.href, "/dav/");
+      const book = items.find((i) => i.props.getcontenttype === "application/epub+zip")!;
+      assert.ok(book, "a book is listed");
+      assert.equal(book.props.displayname, "Trạch Nhật Phi Thăng.epub");
+      assert.ok(!Number.isNaN(Date.parse(book.props.getlastmodified)));
+
+      // It then downloads from the href it was given, resolved against the server.
+      const url = new URL(book.href, base).toString();
+      const one = parse(await (await propfind(url, "0")).text());
+      assert.equal(one.length, 1, "a resource's PROPFIND yields exactly one href (vBook rejects more)");
+      const get = await fetch(url, { headers: auth });
+      assert.equal(get.status, 200);
+      const bytes = new Uint8Array(await get.arrayBuffer());
+      assert.equal(String(bytes.length), one[0].props.getcontentlength, "listed length matches the download");
+      assert.equal(parseEpubMeta(bytes).title, "Trạch Nhật Phi Thăng");
+    }
+    // DEPTH: infinity on a flat folder is just the listing.
+    assert.equal((await propfind(`${srv.base}/dav/`, "infinity")).status, 207);
+  });
+
+  test("a book read further on the phone since is never sent back (merge would drag vBook backwards)", async () => {
+    // vBook's newest backup: read on the phone after our position.
+    const phoneAhead: FakeBook = { ...FULL, read: [2, 0.9, T + 500_000] };
+    const id = await sendBackup(srv.base, cookie, backup([phoneAhead]));
+    const j = await runJob(srv.base, cookie, id, "import");
+    assert.equal(item(j, FULL.id).action, "progress");
+    assert.equal((await api(srv.base, cookie, "/api/vbook/progress-backup")).status, 404);
+    const st = (await (await api(srv.base, cookie, "/api/vbook/status")).json()) as { positions: number };
+    assert.equal(st.positions, 0);
+    // Reading on here again puts it back in.
+    await api(srv.base, cookie, `/api/books/${bookId}/progress`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ chapter_idx: 2, scroll_ratio: 0.95, client_ts: T + 600_000 }),
+    });
+    assert.equal((await api(srv.base, cookie, "/api/vbook/progress-backup")).status, 200);
   });
 
   test("deleting a book removes its cached .epub", async () => {
@@ -425,5 +504,69 @@ describe("vBook reading time -> Activity Insights", () => {
     const s = await stats();
     assert.equal(s.daily.reduce((a, d) => a + d.seconds, 0), 2700);
     assert.equal(s.daily.length, 2);
+  });
+});
+
+describe("vBook bookmarks", () => {
+  let srv: TestServer;
+  let cookie: string;
+  let ownedId: string;
+  // New format (vBook's SyncBookmark serial names) on a book imported from vBook.
+  const MARKED: FakeBook = {
+    id: "fff666", name: "Marked Book", author: "X", toc: ["Chương 1 - A", "Chương 2 - B"], have: [0, 1], read: [1, 0, T],
+    marks: [
+      { id: "m1", type: 0, chapter_index: 1, chapter_name: "Chương 2 - B", color: "#ffeb3b", content: "fff666-p1-b", description: "hay", start_position: 40, end_position: 51, create_at: T - 1000 },
+      { id: "m2", type: 0, chapter_index: 0, chapter_name: "Chương 1 - A", content: "text that is nowhere", description: "", start_position: 0, end_position: 5, create_at: T - 500 },
+    ],
+  };
+  // Older backups: chap_index / title / timestamp, on a copy that came from elsewhere.
+  const OLDFMT: FakeBook = {
+    id: "ggg777", name: "Owned Book", author: "Test Author", toc: ["Intro", "Chapter 1", "Chapter 2", "Chapter 3"], have: [],
+    marks: [{ id: 5, chap_index: 2, title: "Chapter 2", content: "c2p1 c2p1", position: 0.3, timestamp: T }],
+  };
+  const list = async () => ((await (await api(srv.base, cookie, "/api/bookmarks")).json()) as { bookmarks: { book_id: string; chapter_idx: number; p: number; snippet: string; note: string }[] }).bookmarks;
+
+  before(async () => {
+    srv = await startServer();
+    cookie = await login(srv.base);
+    const r = await upload(srv.base, cookie, makeEpub("Owned Book", OLDFMT.toc.map((t) => ({ title: t, paragraphs: 3, paragraphChars: 50 }))));
+    ownedId = r.body.id!;
+    await ingestAll(srv.base, cookie, ownedId);
+  });
+  after(async () => { await srv.stop(); cleanup(srv.dataDir); });
+
+  test("findParagraph locates a bookmark by its text", () => {
+    assert.equal(findParagraph(["first one", "the  Second\nparagraph here", "third"], "second paragraph"), 1);
+    assert.equal(findParagraph(["a", "b"], "missing"), -1);
+  });
+
+  test("bookmarks come in with the book, on the right chapter and paragraph, with the note", async () => {
+    const id = await sendBackup(srv.base, cookie, backup([MARKED, OLDFMT]));
+    const pre = await runJob(srv.base, cookie, id, "preview");
+    assert.equal((item(pre, MARKED.id) as unknown as { bookmarks: number }).bookmarks, 2);
+    const imp = await runJob(srv.base, cookie, id, "import");
+    for (const b of imp.ingest) await ingestAll(srv.base, cookie, b.id);
+    const markedId = item(imp, MARKED.id).match!.id;
+    const marks = await list();
+    const mine = marks.filter((m) => m.book_id === markedId).sort((a, b) => a.chapter_idx - b.chapter_idx);
+    assert.deepEqual(mine.map((m) => [m.chapter_idx, m.p, m.note]), [[0, 0, ""], [1, 2, "hay"]],
+      "text found -> its paragraph (after the heading); text not found -> top of the chapter");
+    // The paragraph it points at really is the bookmarked one.
+    const blocks = ((await (await api(srv.base, cookie, `/api/books/${markedId}/chapters/1`)).json()) as { blocks: { text: string }[] }).blocks;
+    assert.equal(blocks[mine[1].p].text, "fff666-p1-b");
+
+    const owned = marks.filter((m) => m.book_id === ownedId);
+    assert.equal(owned.length, 1, "old-format bookmark lands on the copy from elsewhere, by chapter title");
+    assert.equal(owned[0].chapter_idx, 2);
+    const ob = ((await (await api(srv.base, cookie, `/api/books/${ownedId}/chapters/2`)).json()) as { blocks: { text: string }[] }).blocks;
+    assert.ok(ob[owned[0].p].text.startsWith("c2p1"), ob[owned[0].p].text.slice(0, 20));
+    assert.match(item(imp, OLDFMT.id).outcome ?? "", /1 bookmark/);
+  });
+
+  test("importing the same backup again does not duplicate bookmarks", async () => {
+    const before = (await list()).length;
+    const id = await sendBackup(srv.base, cookie, backup([MARKED, OLDFMT]));
+    await runJob(srv.base, cookie, id, "import");
+    assert.equal((await list()).length, before);
   });
 });

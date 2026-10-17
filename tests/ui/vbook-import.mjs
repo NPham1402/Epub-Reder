@@ -90,6 +90,15 @@ try {
   const inBooks = await page.$$eval(".in-book-name", (n) => n.map((x) => x.textContent));
   check("Activity Insights lists vBook's reading time as vBook (phone)", inBooks.includes("vBook (phone)"), inBooks.join(" | "));
 
+  // Opening the book recorded a position (after a short debounce) newer than
+  // vBook's, which is what makes it eligible to go back to vBook.
+  let positions = 0;
+  for (let i = 0; i < 40 && positions < 1; i++) {
+    positions = await page.evaluate(async () => (await (await fetch("/api/vbook/status")).json()).positions);
+    if (positions < 1) await page.waitForTimeout(250);
+  }
+  check("opening the book counts as reading here, even after switching to an extension tab right away", positions >= 1, String(positions));
+
   // Sync & Backup: the vBook card. (Clicking the already-open view's icon would
   // collapse the side bar, as in VS Code.)
   if (!(await page.locator("#view-extensions").isVisible())) await page.click('.ab-icon[data-view="extensions"]');

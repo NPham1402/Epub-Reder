@@ -335,11 +335,14 @@ registerExtension({
       const row = el("div", "xp-action-toolbar");
       const dl = el("a", "xp-btn secondary", "Download positions for vBook");
       dl.id = "vbook-positions";
-      if (s.positions) { dl.href = "/api/vbook/progress-backup"; dl.setAttribute("download", ""); }
-      else { dl.setAttribute("aria-disabled", "true"); dl.classList.add("disabled"); dl.title = "No module from vBook has a reading position yet."; }
+      if (s.positions) { dl.href = "/api/vbook/progress-backup"; dl.setAttribute("download", ""); dl.textContent += ` (${s.positions})`; }
+      else { dl.setAttribute("aria-disabled", "true"); dl.classList.add("disabled"); dl.title = "No module from vBook has been read further here than in vBook's last backup."; }
       row.appendChild(dl);
       vb.appendChild(row);
-      vb.appendChild(el("p", "xp-sec-desc", "In vBook, restore that file in Merge mode: it only carries the reading position of books that came from vBook. Not yet tried against a real phone — back up vBook first."));
+      const how = el("p", "xp-sec-desc");
+      how.id = "vbook-howto";
+      how.textContent = "It holds only the modules read further here than in vBook's newest backup you imported — so import that backup first. In vBook, restore it with Merge (Gộp). Never use Replace all (Thay thế toàn bộ): this file has only these books, and that mode would remove every other book on the phone. Not yet tried on a real phone: back up vBook first.";
+      vb.appendChild(how);
     }).catch(() => { vbStatus.textContent = "Could not reach the server."; });
 
     // 4. Synchronized Data Entities Section
