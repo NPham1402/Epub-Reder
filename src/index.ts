@@ -15,9 +15,13 @@ import {
   abortIngest, busyBooks, contentBinKey, legacyContentKey, spineMetaKey, stagedKey, stagedPrefix, uploadPartKey, uploadPrefix,
 } from "./storage";
 import { discardUploadParts } from "./maintenance";
+import { readVbookBackup, sameTitle, type VbookBook } from "./vbook";
 
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 const MAX_EPUB_BYTES = 80 * 1024 * 1024; // 80 MB guard
+// A vBook backup (.tar.zst) is streamed, never held whole in memory.
+const MAX_VBOOK_BYTES = 1024 * 1024 * 1024;
+const VBOOK_NAME_RE = /.zst$/i;
 const META_PER_BATCH = 150; // chapter-metadata inserts per D1 batch
 // R2 multipart parts must all be the exact same size except the last, and
 // >= 5MiB. Kept close to that minimum so each (occasional — see
@@ -466,7 +470,7 @@ app.post("/api/uploads", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { size?: number; name?: string };
   const size = Number(body.size);
   if (!Number.isInteger(size) || size <= 0) return c.json({ error: "size is required" }, 400);
-  if (size > MAX_EPUB_BYTES) return c.json({ error: "file too large" }, 413);
+  if (size > (VBOOK_NAME_RE.test(String(body.name ?? "")) ? MAX_VBOOK_BYTES : MAX_EPUB_BYTES)) return c.json({ error: "file too large" }, 413);
   const id = crypto.randomUUID();
   await c.env.DB.prepare(
     `INSERT INTO uploads (id, size, part_size, name, created_at) VALUES (?, ?, ?, ?, ?)`,
@@ -528,6 +532,8 @@ app.post("/api/uploads/:id/complete", async (c) => {
       .bind(id).first<UploadRow>();
     if (!up) return c.json({ error: "not found" }, 404);
 
+    if (VBOOK_NAME_RE.test(up.name ?? "")) return c.json({ error: "this is a vBook backup: use /api/uploads/:id/vbook" }, 400);
+
     // Already assembled (the client is retrying after a lost response): answer with the same book.
     if (up.book_id) {
       const book = await c.env.DB.prepare(`SELECT id, title, code_name, chapter_count FROM books WHERE id = ?`)
@@ -582,6 +588,192 @@ app.post("/api/uploads/:id/complete", async (c) => {
   } finally {
     busyBooks.delete(lock);
   }
+});
+
+// --- vBook backup import (docs/platform-upgrade.md §13, EPR-19) ---------------
+// The backup arrives through the same part-by-part upload as a book. Reading
+// it takes far longer than a proxy waits for one request, so it runs as a
+// background job the page polls. Two passes over the (streamed) archive:
+// "preview" lists the books and what would happen to each; "import" applies
+// the reader's choices. A created book is registered like any upload and the
+// page then drives its /ingest-chunk to completion, as for a normal import.
+type VbookAction = "create" | "progress" | "skip";
+interface VbookRow {
+  id: string; title: string; author: string | null; code_name: string; chapter_count: number;
+  vbook_id: string | null; ingest_done: number;
+}
+interface VbookItem {
+  vbook_id: string; title: string; author: string | null; source: string | null;
+  chapters: number; downloaded: number;
+  progress: { chapter: number; ratio: number; at: number; name: string | null } | null;
+  match: { id: string; code_name: string; title: string; by: "vbook" | "title" } | null;
+  options: VbookAction[]; action: VbookAction;
+  outcome?: string;
+}
+interface VbookJob {
+  id: string; uploadId: string; mode: "preview" | "import"; at: number;
+  state: "running" | "done" | "error"; scanned: number; current: string | null;
+  error: string | null;
+  device: string | null; created_at: number | null;
+  items: VbookItem[];
+  ingest: { id: string; code_name: string; title: string; total: number }[];
+}
+const vbookJobs = new Map<string, VbookJob>();
+// Placeholder for a chapter vBook listed but never downloaded: keeps chapter
+// numbers identical to vBook's, so progress maps one-to-one.
+const VBOOK_MISSING = "(This section has not been downloaded in vBook yet.)";
+
+async function* uploadedBytes(env: Env, id: string, parts: number): AsyncGenerator<Uint8Array> {
+  for (let i = 0; i < parts; i++) {
+    const obj = await env.BOOKS.get(uploadPartKey(id, i));
+    if (!obj) throw new Error(`part ${i} of the upload is missing`);
+    yield new Uint8Array(await obj.arrayBuffer());
+  }
+}
+
+function planVbook(b: VbookBook, rows: VbookRow[]): VbookItem {
+  const byId = rows.find((r) => r.vbook_id === b.id);
+  const byName = byId ? undefined : rows.find((r) =>
+    !r.vbook_id && sameTitle(r.title, b.title) && (!r.author || !b.author || sameTitle(r.author, b.author)));
+  const match = byId ?? byName;
+  const options: VbookAction[] = [];
+  if (match) options.push("progress");
+  if (!byId && b.downloaded > 0) options.push("create");
+  options.push("skip");
+  return {
+    vbook_id: b.id, title: b.title, author: b.author, source: b.source,
+    chapters: b.toc.length, downloaded: b.downloaded,
+    progress: b.progress ? { chapter: b.progress.idx, ratio: b.progress.ratio, at: b.progress.at, name: b.progress.chapter } : null,
+    match: match ? { id: match.id, code_name: match.code_name, title: match.title, by: byId ? "vbook" : "title" } : null,
+    // Defaults (§13.5): a book that is already here keeps its copy, only its
+    // progress moves; a book with no downloaded text can't become readable.
+    options, action: options[0],
+  };
+}
+
+// Where vBook's reading position lands in a book here. A book imported from
+// vBook has vBook's exact chapter list; any other copy is matched by title.
+async function vbookChapterIdx(env: Env, row: VbookRow, b: VbookBook): Promise<number | null> {
+  const p = b.progress;
+  if (!p) return null;
+  if (row.vbook_id === b.id) return Math.min(p.idx, Math.max(0, row.chapter_count - 1));
+  const name = p.chapter ?? b.toc[p.idx];
+  const { results } = await env.DB.prepare(`SELECT idx, title FROM chapters WHERE book_id = ? ORDER BY idx`)
+    .bind(row.id).all<{ idx: number; title: string | null }>();
+  const hit = results.find((r) => sameTitle(r.title, name));
+  return hit ? hit.idx : null;
+}
+
+async function runVbookJob(env: Env, job: VbookJob, parts: number, choices: Record<string, string>): Promise<void> {
+  const unzstd = env.VBOOK_UNZSTD!;
+  const { results: rows } = await env.DB.prepare(
+    `SELECT id, title, author, code_name, chapter_count, vbook_id, ingest_done FROM books`,
+  ).all<VbookRow>();
+  const want = (it: VbookItem): VbookAction => {
+    const c = choices[it.vbook_id] as VbookAction | undefined;
+    return c && it.options.includes(c) ? c : it.action;
+  };
+
+  // Preview needs only the small JSON files; import keeps chapter text only for
+  // the books being created.
+  let only: Set<string> | undefined;
+  if (job.mode === "import") {
+    only = new Set<string>();
+    await readVbookBackup(unzstd(uploadedBytes(env, job.uploadId, parts)), async (b) => {
+      if (want(planVbook(b, rows)) === "create") only!.add(b.id);
+    }, { withContent: false });
+  }
+
+  const { manifest } = await readVbookBackup(unzstd(uploadedBytes(env, job.uploadId, parts)), async (b) => {
+    job.scanned++;
+    job.current = b.title;
+    const item = planVbook(b, rows);
+    job.items.push(item);
+    if (job.mode === "preview") return;
+    item.action = want(item);
+
+    if (item.action === "skip") { item.outcome = "skipped"; return; }
+
+    if (item.action === "create") {
+      const last = Math.max(b.toc.length, ...[...b.contents.keys()].map((k) => k + 1));
+      const chapters = Array.from({ length: last }, (_, pos) => ({
+        title: b.toc[pos] || `Chapter ${pos + 1}`,
+        blocks: (b.contents.get(pos) ?? [VBOOK_MISSING]).map((text) => ({ type: "p", text })),
+      }));
+      const r = await createBookFromBytes(env, buildEpub({ title: b.title, author: b.author, language: b.language, chapters }));
+      if (r.status !== 200) { item.outcome = `error: ${String(r.body.error ?? r.status)}`; return; }
+      const id = r.body.id as string;
+      await env.DB.prepare(`UPDATE books SET vbook_id = ?, vbook_json = ? WHERE id = ?`)
+        .bind(b.id, JSON.stringify(b.meta), id).run();
+      const row: VbookRow = { id, title: b.title, author: b.author, code_name: r.body.code_name as string, chapter_count: chapters.length, vbook_id: b.id, ingest_done: 0 };
+      rows.push(row);
+      item.match = { id, code_name: row.code_name, title: b.title, by: "vbook" };
+      job.ingest.push({ id, code_name: row.code_name, title: b.title, total: chapters.length });
+      if (b.progress) await upsertProgress(env, id, Math.min(b.progress.idx, chapters.length - 1), b.progress.ratio, clampTs(b.progress.at));
+      item.outcome = `created (${b.downloaded}/${chapters.length} sections with text)`;
+      return;
+    }
+
+    // progress only
+    const row = rows.find((r) => r.id === item.match!.id)!;
+    if (row.vbook_id === b.id && !row.ingest_done) {
+      // Created by an earlier import whose indexing never finished: finish it now.
+      job.ingest.push({ id: row.id, code_name: row.code_name, title: row.title, total: row.chapter_count });
+    }
+    const idx = await vbookChapterIdx(env, row, b);
+    if (idx === null) { item.outcome = b.progress ? "progress not applied: vBook's chapter was not found in this copy" : "no reading position in vBook"; return; }
+    await upsertProgress(env, row.id, idx, b.progress!.ratio, clampTs(b.progress!.at));
+    item.outcome = `progress: section ${idx + 1}`;
+  }, { withContent: job.mode === "import", only });
+
+  job.device = manifest?.device_name ?? null;
+  job.created_at = manifest?.create_at ?? null;
+  job.current = null;
+  if (job.mode === "import") {
+    await discardUploadParts(env, job.uploadId);
+    await env.DB.prepare(`DELETE FROM uploads WHERE id = ?`).bind(job.uploadId).run();
+  }
+}
+
+app.post("/api/uploads/:id/vbook", async (c) => {
+  if (!c.env.VBOOK_UNZSTD) return c.json({ error: "vBook backups can only be imported on the self-hosted server" }, 501);
+  const id = c.req.param("id");
+  const body = (await c.req.json().catch(() => ({}))) as { mode?: string; actions?: Record<string, string> };
+  const mode = body.mode === "import" ? "import" : "preview";
+  const up = await c.env.DB.prepare(`SELECT size, part_size, book_id, name FROM uploads WHERE id = ?`).bind(id).first<UploadRow>();
+  if (!up) return c.json({ error: "not found" }, 404);
+  if (!VBOOK_NAME_RE.test(up.name ?? "")) return c.json({ error: "not a vBook backup (.tar.zst)" }, 400);
+  const parts = Math.ceil(up.size / up.part_size);
+  const { objects } = await c.env.BOOKS.list({ prefix: uploadPrefix(id) });
+  const have = new Set(objects.map((o) => o.key));
+  const missing: number[] = [];
+  for (let i = 0; i < parts; i++) if (!have.has(uploadPartKey(id, i))) missing.push(i);
+  if (missing.length) return c.json({ error: `missing parts: ${missing.slice(0, 10).join(", ")}`, missing }, 409);
+
+  for (const [k, j] of vbookJobs) if (Date.now() - j.at > 3_600_000) vbookJobs.delete(k);
+  for (const j of vbookJobs.values()) {
+    if (j.uploadId === id && j.state === "running") {
+      if (j.mode !== mode) return c.json({ error: "this backup is still being read — wait for it to finish" }, 409);
+      return c.json({ job: j.id }); // a retried request: same job
+    }
+  }
+  const job: VbookJob = {
+    id: crypto.randomUUID(), uploadId: id, mode, at: Date.now(), state: "running", scanned: 0, current: null,
+    error: null, device: null, created_at: null, items: [], ingest: [],
+  };
+  vbookJobs.set(job.id, job);
+  runVbookJob(c.env, job, parts, body.actions ?? {}).then(
+    () => { job.state = "done"; },
+    (err) => { job.state = "error"; job.error = errMsg(err); console.error("vbook import", err); },
+  );
+  return c.json({ job: job.id });
+});
+
+app.get("/api/vbook-jobs/:id", (c) => {
+  const job = vbookJobs.get(c.req.param("id"));
+  if (!job) return c.json({ error: "not found" }, 404);
+  const { uploadId: _u, at: _a, ...view } = job;
+  return c.json(view);
 });
 
 // --- Upload: stage 2 — process the next CHUNK_SIZE chapters. Call
@@ -782,12 +974,17 @@ app.post("/api/books/:id/progress", async (c) => {
 
   const exists = await c.env.DB.prepare(`SELECT 1 AS ok FROM books WHERE id = ?`).bind(id).first();
   if (!exists) return c.json({ error: "not found" }, 404);
+  await upsertProgress(c.env, id, chapterIdx, ratio, clientTs);
+  return c.json({ ok: true });
+});
+
+async function upsertProgress(env: Env, id: string, chapterIdx: number, ratio: number, clientTs: number): Promise<void> {
   // Two rules in one row. The *current* position (used to resume) belongs to
   // whichever device wrote last by its own clock. The *furthest* position (used
   // for "% read") only ever moves forward, whatever order requests arrive in.
   const ahead = `(excluded.furthest_idx > progress.furthest_idx
     OR (excluded.furthest_idx = progress.furthest_idx AND excluded.furthest_ratio > progress.furthest_ratio))`;
-  await c.env.DB.prepare(
+  await env.DB.prepare(
     `INSERT INTO progress (book_id, chapter_idx, scroll_ratio, updated_at, furthest_idx, furthest_ratio, client_ts)
      VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(book_id) DO UPDATE SET
@@ -798,9 +995,7 @@ app.post("/api/books/:id/progress", async (c) => {
        furthest_idx   = CASE WHEN ${ahead} THEN excluded.furthest_idx ELSE progress.furthest_idx END,
        furthest_ratio = CASE WHEN ${ahead} THEN excluded.furthest_ratio ELSE progress.furthest_ratio END`,
   ).bind(id, chapterIdx, ratio, Date.now(), chapterIdx, ratio, clientTs).run();
-
-  return c.json({ ok: true });
-});
+}
 
 // --- Synced reader state: settings, highlights, bookmarks ----------------------
 // Everything a reader creates lives in SQLite (backed up, follows the reader

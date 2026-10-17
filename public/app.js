@@ -1058,7 +1058,7 @@ async function zipProblem(file) {
 // long to deliver its body, and on a slow or flaky link a big file blows past
 // that and arrives truncated. Small parts each finish in seconds, can be
 // retried on their own, and give real progress. Returns {ok, book} | {ok:false, error}.
-async function uploadInParts(file, { onProgress, onFinishing, dry = false }) {
+async function uploadInParts(file, { onProgress, onFinishing, dry = false, noFinish = false }) {
   const CONCURRENCY = 3;
   const MAX_TRIES = 6;
 
@@ -1094,6 +1094,7 @@ async function uploadInParts(file, { onProgress, onFinishing, dry = false }) {
     }
   }));
   if (failure) return { ok: false, error: failure.message };
+  if (noFinish) return { ok: true, uploadId: id };
 
   onFinishing();
   for (let attempt = 1; attempt <= 4; attempt++) {
@@ -1167,6 +1168,129 @@ async function finishUpload(uploadId) {
   return { ok: false, error: "the import could not be finished — check the connection and retry" };
 }
 
+// ---- vBook backup (.tar.zst) -------------------------------------------------
+// Uploaded in parts like a book, then read by a server-side job the page
+// polls: a preview pass (one row per book, with a choice for each), then the
+// import. Created books are indexed here exactly like a normal upload.
+async function vbookJob(uploadId, mode, actions, onTick) {
+  const res = await api(`/api/uploads/${uploadId}/vbook`, { method: "POST", body: JSON.stringify({ mode, actions }) }).catch(() => null);
+  if (!res) return { ok: false, error: "could not reach the server" };
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return { ok: false, error: data.error || `HTTP ${res.status}` };
+  for (let misses = 0; ;) {
+    await sleep(700);
+    const r = await api(`/api/vbook-jobs/${data.job}`).catch(() => null);
+    if (!r) { if (++misses > 20) return { ok: false, error: "lost contact with the server" }; continue; }
+    misses = 0;
+    const j = await r.json().catch(() => null);
+    if (!r.ok || !j) return { ok: false, error: (j && j.error) || `HTTP ${r.status}` };
+    onTick(j);
+    if (j.state === "done") return { ok: true, job: j };
+    if (j.state === "error") return { ok: false, error: j.error || "the backup could not be read" };
+  }
+}
+
+const VBOOK_LABELS = { create: "Import", progress: "Update position", skip: "Skip" };
+function showVbookPreview(job) {
+  return new Promise((resolve) => {
+    const box = $("#upload-preview");
+    box.innerHTML = "";
+    box.hidden = false;
+    const choices = {};
+    const done = (yes) => { pendingPreview = null; box.hidden = true; resolve(yes ? choices : null); };
+    pendingPreview = done;
+    const when = job.created_at ? new Date(job.created_at).toLocaleString() : "";
+    box.appendChild(el("div", "up-title", `vBook backup · ${job.items.length} book${job.items.length === 1 ? "" : "s"}`));
+    box.appendChild(el("div", "up-sub", [job.device, when].filter(Boolean).join(" · ")));
+    const list = el("div", "up-list");
+    for (const it of job.items) {
+      const row = el("div", "up-row vb-row");
+      const info = el("span", "up-t");
+      info.textContent = it.title;
+      info.title = [it.title, it.author, it.source].filter(Boolean).join(" · ");
+      row.appendChild(info);
+      const pos = it.progress ? ` · at ${it.progress.chapter + 1}` : "";
+      row.appendChild(el("span", "up-c", `${it.downloaded}/${it.chapters}${pos}`));
+      const sel = el("select", "vb-action");
+      for (const o of it.options) {
+        const opt = el("option", null, o === "progress" && it.match ? `${VBOOK_LABELS[o]} → ${it.match.code_name}` : VBOOK_LABELS[o]);
+        opt.value = o;
+        sel.appendChild(opt);
+      }
+      sel.value = it.action;
+      sel.disabled = it.options.length === 1;
+      if (it.options.length === 1 && it.downloaded === 0) sel.title = "Nothing downloaded in vBook for this book, and no copy here to update.";
+      choices[it.vbook_id] = it.action;
+      sel.addEventListener("change", () => { choices[it.vbook_id] = sel.value; });
+      row.appendChild(sel);
+      list.appendChild(row);
+    }
+    box.appendChild(list);
+    const partial = job.items.filter((i) => i.action === "create" && i.downloaded < i.chapters).length;
+    if (partial) box.appendChild(el("div", "up-warn", `! ${partial} book${partial === 1 ? " is" : "s are"} only partly downloaded in vBook; the missing sections are kept as placeholders so section numbers match vBook.`));
+    const btns = el("div", "up-btns");
+    const yes = el("button", "xp-btn", "Import");
+    const no = el("button", "xp-btn secondary", "Cancel");
+    yes.type = no.type = "button";
+    yes.addEventListener("click", () => done(true));
+    no.addEventListener("click", () => done(false));
+    btns.appendChild(yes);
+    btns.appendChild(no);
+    box.appendChild(btns);
+  });
+}
+
+async function importVbookBackup(file) {
+  const status = $("#upload-status");
+  const mb = (n) => (n / 1048576).toFixed(1);
+  const fail = (msg) => { status.classList.add("err"); status.textContent = `! ${msg}`; };
+  status.textContent = `> uploading ${file.name} … 0%`;
+  const up = await uploadInParts(file, {
+    onProgress: (sent) => { status.textContent = `> uploading ${file.name} … ${Math.floor((sent / file.size) * 100)}% (${mb(sent)} / ${mb(file.size)} MB)`; },
+    onFinishing: () => {},
+    noFinish: true,
+  });
+  if (!up.ok) return fail(up.error);
+
+  status.textContent = "> reading the backup …";
+  const pre = await vbookJob(up.uploadId, "preview", {}, (j) => {
+    status.textContent = `> reading the backup … ${j.scanned} book${j.scanned === 1 ? "" : "s"}`;
+  });
+  if (!pre.ok) return fail(pre.error);
+  if (!pre.job.items.length) {
+    api(`/api/uploads/${up.uploadId}`, { method: "DELETE" }).catch(() => {});
+    return fail("no books found in this backup");
+  }
+  status.textContent = `> ${file.name}: choose what to import`;
+  const choices = await showVbookPreview(pre.job);
+  if (!choices) {
+    api(`/api/uploads/${up.uploadId}`, { method: "DELETE" }).catch(() => {});
+    status.textContent = "> import cancelled";
+    return;
+  }
+
+  const imp = await vbookJob(up.uploadId, "import", choices, (j) => {
+    status.textContent = `> importing … ${j.scanned}/${pre.job.items.length}${j.current ? ` · ${j.current}` : ""}`;
+  });
+  if (!imp.ok) return fail(imp.error);
+
+  const toIndex = imp.job.ingest;
+  for (let i = 0; i < toIndex.length; i++) {
+    const b = toIndex[i];
+    const r = await ingestChapters(b.id, (processed, total) => {
+      status.textContent = `> indexing ${i + 1}/${toIndex.length} "${b.code_name}" … ${processed}/${total}`;
+    });
+    if (!r.ok) return fail(`"${b.code_name}": ${r.error}`);
+    if (typeof autoIndexNewBook === "function") autoIndexNewBook(b.id);
+  }
+
+  const count = (a) => imp.job.items.filter((it) => it.action === a).length;
+  status.textContent = `> vBook import done · ${count("create")} imported · ${count("progress")} position${count("progress") === 1 ? "" : "s"} updated · ${count("skip")} skipped`;
+  const list = await api("/api/books").then((r) => r.json());
+  state.books = list.books;
+  renderTree();
+}
+
 async function uploadFile(file) {
   const status = $("#upload-status");
   status.hidden = false;
@@ -1174,6 +1298,7 @@ async function uploadFile(file) {
   $("#upload-preview").hidden = true;
   const mb = (n) => (n / 1048576).toFixed(1);
   const isText = /\.(txt|text|html?|xhtml)$/i.test(file.name);
+  if (/\.zst$/i.test(file.name)) return importVbookBackup(file);
 
   const problem = isText ? null : await zipProblem(file);
   if (problem) {

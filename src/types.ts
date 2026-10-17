@@ -10,6 +10,9 @@ export interface Env {
   COOKIE_SECURE?: string; // "true" | "false"; unset = detect from the request
   // Extra fields merged into the /healthz response (the Node server reports disk space).
   HEALTH_EXTRA?: () => Record<string, unknown> | Promise<Record<string, unknown>>;
+  // zstd decompression for vBook backups (.tar.zst). Only the Node server has
+  // it; without it the vBook import answers 501.
+  VBOOK_UNZSTD?: (src: AsyncIterable<Uint8Array>) => AsyncIterable<Uint8Array>;
 }
 
 export type BlockType = "h1" | "h2" | "h3" | "p";

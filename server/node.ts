@@ -13,6 +13,8 @@
 //   STALE_INGEST_HOURS  abandoned first-time uploads older than this are removed (default 24)
 //   APP_TITLE
 
+import { Readable } from "node:stream";
+import { createZstdDecompress } from "node:zlib";
 import { serve } from "@hono/node-server";
 import { statfsSync, existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -88,6 +90,8 @@ const env = {
   APP_TITLE: process.env.APP_TITLE ?? "Internal Developer Docs",
   CHUNK_SIZE: process.env.CHUNK_SIZE ?? "300",
   COOKIE_SECURE: process.env.COOKIE_SECURE,
+  // vBook backups are .tar.zst; zstd is built into Node 24's zlib.
+  VBOOK_UNZSTD: (src: AsyncIterable<Uint8Array>) => Readable.from(src).pipe(createZstdDecompress()) as AsyncIterable<Uint8Array>,
   HEALTH_EXTRA: () => {
     const s = statfsSync(dataDir);
     const freePct = Math.round((Number(s.bavail) / Number(s.blocks)) * 1000) / 10;

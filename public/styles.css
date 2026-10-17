@@ -792,6 +792,9 @@ kbd {
 .up-gap { padding: 0 8px 0 52px; color: var(--fg-muted); }
 .up-warn { margin-top: 8px; color: #d7ba7d; font-size: 12px; }
 .up-btns { display: flex; gap: 8px; margin-top: 12px; }
+.vb-row { align-items: center; }
+.vb-action { background: var(--input-bg); color: var(--fg); border: 1px solid var(--input-border); border-radius: 3px; font-size: 12px; padding: 1px 4px; max-width: 200px; font-family: inherit; }
+.vb-action:disabled { opacity: 0.6; }
 
 /* Global Search */
 .gs-bar { display: flex; gap: 8px; margin-bottom: 10px; }
