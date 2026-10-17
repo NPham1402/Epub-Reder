@@ -20,6 +20,11 @@ const TYPES: Record<string, string> = {
   ".txt": "text/plain; charset=utf-8",
 };
 
+// Stamped into every asset URL in index.html (`?v=__BUILD__`). The image gets
+// the commit sha (Dockerfile ARG); elsewhere the process start time does, which
+// still changes on every deploy.
+const BUILD_ID = (process.env.BUILD_SHA || "").slice(0, 12) || Date.now().toString(36);
+
 export function staticAssets(publicDir: string) {
   const root = resolve(publicDir);
 
@@ -39,14 +44,17 @@ export function staticAssets(publicDir: string) {
       const found = (inside && (await load(wanted))) || (await load(resolve(root, "index.html")));
       if (!found) return new Response("not found", { status: 404 });
 
-      const etag = `W/"${found.st.size}-${Math.floor(found.st.mtimeMs)}"`;
+      const isHtml = extname(found.path).toLowerCase() === ".html";
+      const etag = `W/"${found.st.size}-${Math.floor(found.st.mtimeMs)}${isHtml ? "-" + BUILD_ID : ""}"`;
       const headers = {
         "content-type": TYPES[extname(found.path).toLowerCase()] ?? "application/octet-stream",
         "cache-control": "no-cache",
         etag,
       };
       if (req.headers.get("if-none-match") === etag) return new Response(null, { status: 304, headers });
-      return new Response(req.method === "HEAD" ? null : new Uint8Array(await fs.readFile(found.path)), { headers });
+      if (req.method === "HEAD") return new Response(null, { headers });
+      if (isHtml) return new Response((await fs.readFile(found.path, "utf8")).replaceAll("__BUILD__", BUILD_ID), { headers });
+      return new Response(new Uint8Array(await fs.readFile(found.path)), { headers });
     },
   };
 }

@@ -12,12 +12,10 @@
     <!-- Lets Edge/Chrome offer "Install app": a separate window, its own
     Start Menu/taskbar entry and icon, no address bar. -->
     <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="app-build" content="__BUILD__" />
     <meta name="theme-color" content="#3c3c3c" id="meta-theme-color" />
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&family=Literata:ital,opsz,wght@0,7..72,400;0,7..72,600;1,7..72,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
-    <link rel="stylesheet" href="/codicon.css" />
-    <link rel="stylesheet" href="/styles.css?v=2.4" />
+    <link rel="stylesheet" href="/codicon.css?v=__BUILD__" />
+    <link rel="stylesheet" href="/styles.css?v=__BUILD__" />
   </head>
   <body>
     <!-- ===================== IDE SHELL ===================== -->
@@ -432,13 +430,13 @@
 
     <div class="toasts" id="toasts" hidden></div>
 
-    <script src="/app.js?v=2.4"></script>
-    <script src="/docview.js?v=2.4"></script>
-    <script src="/palette.js?v=2.4"></script>
-    <script src="/extensions.js?v=2.4"></script>
-    <script src="/sync.js?v=2.4"></script>
-    <script src="/insights.js?v=2.4"></script>
-    <script src="/search.js?v=2.4"></script>
-    <script src="/chat.js?v=2.4"></script>
+    <script src="/app.js?v=__BUILD__"></script>
+    <script src="/docview.js?v=__BUILD__"></script>
+    <script src="/palette.js?v=__BUILD__"></script>
+    <script src="/extensions.js?v=__BUILD__"></script>
+    <script src="/sync.js?v=__BUILD__"></script>
+    <script src="/insights.js?v=__BUILD__"></script>
+    <script src="/search.js?v=__BUILD__"></script>
+    <script src="/chat.js?v=__BUILD__"></script>
   </body>
 </html>

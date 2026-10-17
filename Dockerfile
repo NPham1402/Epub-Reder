@@ -22,6 +22,9 @@ COPY client ./client
 RUN npm run build:monaco
 
 FROM node:24-alpine AS runtime
+# Commit sha, stamped into asset URLs by server/assets.ts (cache busting).
+ARG BUILD_SHA=
+ENV BUILD_SHA=$BUILD_SHA
 ENV NODE_ENV=production \
     PORT=8787 \
     DATA_DIR=/data \

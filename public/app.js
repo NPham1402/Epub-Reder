@@ -1,5 +1,10 @@
 "use strict";
 
+// The server stamps this per build (server/assets.ts). Every asset URL carries
+// it, so a deploy is a new URL that no CDN/browser/service-worker cache can
+// answer with the old file.
+const APP_BUILD = document.querySelector('meta[name="app-build"]')?.content || "dev";
+
 /* ============================ Icons (VS Code codicons) ===================== */
 const CODI = {
   logo: "code", files: "files", search: "search", "git-branch": "source-control",
@@ -80,10 +85,10 @@ function ensureMonaco() {
   monacoLoading = new Promise((resolve, reject) => {
     const css = document.createElement("link");
     css.rel = "stylesheet";
-    css.href = "/vendor/monaco/monaco.css";
+    css.href = `/vendor/monaco/monaco.css?v=${APP_BUILD}`;
     document.head.appendChild(css);
     const s = document.createElement("script");
-    s.src = "/vendor/monaco/monaco.js";
+    s.src = `/vendor/monaco/monaco.js?v=${APP_BUILD}`;
     s.onload = () => (window.monaco ? resolve(window.monaco) : reject(new Error("editor missing")));
     s.onerror = () => reject(new Error("could not load the editor"));
     document.head.appendChild(s);
@@ -372,7 +377,7 @@ async function api(path, opts = {}) {
 // content. Signing out clears the cache too — offline access must not outlive
 // the session.
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").then((reg) => {
+  navigator.serviceWorker.register(`/sw.js?v=${APP_BUILD}`).then((reg) => {
     reg.update();
   }).catch(() => {});
 }

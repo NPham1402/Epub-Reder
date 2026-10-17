@@ -9,7 +9,10 @@ import { join } from "node:path";
 import { makeEpub, startServer, cleanup, PASSCODE } from "../helpers.ts";
 
 const mode = process.argv[2] || "compare";
-const FILE = join(tmpdir(), "epub-ui-layout-baseline.json");
+// Committed, so it survives temp cleanup and is shared between machines. Box
+// sizes of text-bearing elements depend on the OS fonts, so capture/compare on
+// the same OS (it is not run in CI for that reason).
+const FILE = new URL("./layout-baseline.json", import.meta.url);
 const SIZES = [[1920, 1080], [1366, 768], [1024, 700]];
 const SELECTORS = {
   titlebar: "header.titlebar", activitybar: ".activitybar", sidebar: "#sidebar", editorgroup: ".editorgroup", statusbar: ".statusbar",

@@ -19,11 +19,16 @@ node --disable-warning=ExperimentalWarning tests/ui/wheel-smooth.mjs  # a mouse-
 node --disable-warning=ExperimentalWarning tests/ui/pwa-install.mjs   # manifest + icons for "Install app", one shared title bar (window-controls-overlay)
 node --disable-warning=ExperimentalWarning tests/ui/offline.mjs       # true network-cut offline reading, download-for-offline, logout clears it
 node --disable-warning=ExperimentalWarning tests/ui/cover-race.mjs    # boss-key cover raised mid-load: nothing real leaks, unlock restores the editor
+node --disable-warning=ExperimentalWarning tests/ui/claude-theme.mjs      # Claude Code pane follows the color theme
+node --disable-warning=ExperimentalWarning tests/ui/claude-responsive.mjs # the pane can never take over a narrow window (even maximized)
+node --disable-warning=ExperimentalWarning tests/ui/claude-history.mjs    # chat history survives a reload; Recent Sessions; closing a tab keeps history
+node --disable-warning=ExperimentalWarning tests/ui/stealth-signout.mjs   # /read and the status-bar reader show real text; sign-out wipes localStorage
+node --disable-warning=ExperimentalWarning tests/ui/palette-docview.mjs   # Ctrl+G / Ctrl+Shift+P palette, Alt+M doc view, boss key over it
 node --disable-warning=ExperimentalWarning tests/ui/layout.mjs capture   # once, on a known-good build
 node --disable-warning=ExperimentalWarning tests/ui/layout.mjs compare   # after a UI change: the shell must not move
 ```
 
-Each prints `PASS`/`FAIL` per check and exits non-zero on any failure. Screenshots
+Each prints `PASS`/`FAIL` per check and exits non-zero on any failure. CI runs all of them except `layout.mjs` (job `ui` in `build-ghcr.yml`) and a red run stops the image, so nothing reaches the cluster. `layout.mjs` keeps its baseline in `tests/ui/layout-baseline.json`; its boxes depend on the OS fonts, so capture and compare on the same OS. Screenshots
 go to `$TMP/epub-ui-shots`. `layout.mjs` measures the boxes of the shell regions
 (title bar, activity bar, side bar, editor group, status bar and a few children)
 at 1920×1080, 1366×768 and 1024×700 in the default state; a UI change is not

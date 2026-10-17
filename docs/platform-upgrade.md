@@ -449,3 +449,26 @@ Theo yêu cầu: "làm cho website có thể download as app trên window đi v�
 App đã cài trước đó có hai thanh chồng nhau: thanh Windows thật (tiêu đề + 3 nút) và thanh VS Code giả bên dưới (cũng có 3 nút giả). Sửa: manifest thêm `display_override: ["window-controls-overlay"]` (giữ `display: standalone` làm dự phòng); CSS trong `@media (display-mode: window-controls-overlay)` cho thanh giả lấy chiều cao/vùng của thanh OS (`env(titlebar-area-*)`), chừa chỗ cho 3 nút thật bên phải, kéo được cửa sổ (`app-region: drag`, menu/nút là `no-drag`) và ẩn 3 nút giả. Ngoài chế độ này (tab trình duyệt, app cài kiểu cũ) không có gì đổi — layout.mjs vẫn khớp từng pixel.
 
 Kiểm chứng: `pwa-install.mjs` (giờ 20 test) kiểm manifest, kiểm bên ngoài chế độ overlay thanh vẫn 30px/nút giả còn nguyên, rồi giả lập chế độ (thay env() bằng số cụ thể) để kiểm chiều cao, ẩn nút giả, nút không chèn lên vùng nút thật, không tràn. Test bắt được một lỗi thật: rule `.tb-win.codicon` có độ ưu tiên cao hơn `display:none` nên nút giả vẫn hiện — đã sửa selector. **Chưa kiểm chứng trên Edge đã cài thật**; muốn nhận chế độ mới phải gỡ app rồi cài lại.
+
+## 16. Bảng nâng cấp sau 3 vòng tự đối chiếu (2026-10-17)
+
+Lập bằng 3 vòng: (1) kiểm kê ~20 ứng viên từ lịch sử và quét code; (2) kiểm từng cái với code thật — bỏ 3 cái sai/thừa, tìm ra 2 lỗi mới có bằng chứng; (3) đối chiếu các đề xuất với nhau — sửa `/read` cộng với việc lưu lịch sử chat sẽ đưa chữ trong sách vào `localStorage`, mà Sign out không xoá nó, nên phải xoá được trước rồi mới sửa `/read`.
+
+| # | Hạng mục | Trạng thái |
+|---|---|---|
+| 1 | Bỏ tên user Windows thật và đường dẫn dự án công ty khỏi `chat.js` / màn che (file tĩnh, tải được khi chưa đăng nhập) | ✅ |
+| 2 | Sign out đẩy hàng đợi lên server rồi xoá mọi khoá `devdocs.*` trong `localStorage`; không ghi lại khi trang tải lại | ✅ `stealth-signout.mjs` |
+| 3 | Test UI Playwright chạy trên CI (job `ui`), đỏ thì không build/deploy | ✅ |
+| 4 | `/read`, `/next`, đọc ở status bar (Ctrl+Alt+S, Alt+[ ]) — đều chết vì `state.current.chapter` không tồn tại | ✅ `stealth-signout.mjs` |
+| 5 | Mở chương từ Bookmarks không làm gì (cả hàng trông bấm được nhưng chỉ nút nhỏ có tác dụng) | ✅ `sync.mjs` xanh 20/20 |
+| 6 | Cloudflare tự cache file tĩnh 4 giờ (ghi đè `no-cache` của server) | ✅ xử lý bằng #7, không cần sửa dashboard |
+| 7 | Mã build gắn vào mọi URL JS/CSS/Monaco/`sw.js` (`?v=<sha>`, server điền vào `index.html`); trang HTML lấy mạng trước; SW dọn bản cũ | ✅ `pwa-install.mjs`, `offline.mjs` |
+| 8 | Google Fonts luôn bị CSP chặn — đã gỡ (chưa từng hiển thị, nên giao diện không đổi) | ✅ |
+| 9 | Cloudflare Web Analytics bị CSP chặn | ⏳ chủ hệ thống tắt trong dashboard (tuỳ chọn) |
+| 10 | Baseline `layout.mjs` lưu trong repo | ✅ (không chạy trên CI: phụ thuộc font của hệ điều hành) |
+| 11 | Test cho palette và Doc view | ✅ `palette-docview.mjs` |
+| 12 | Bảo vệ nhánh `main` | ❎ cố ý chưa làm: sẽ chặn push thẳng (cách đang làm việc); mục tiêu thật — không deploy bản lỗi — đã đạt bằng #3 |
+| 13–17 | EPR-05, EPR-14, EPR-15 (kèm README còn ghi "Cloudflare Workers"), EPR-19/20/21, EPR-16 | ⏳ như mục 11 |
+
+Thêm trong lúc làm: `renderMarkdown()` của panel chat giờ escape trước khi định dạng (đầu vào có thể là chữ trong sách hoặc prompt đã lưu, và nó đi vào `innerHTML`).
+

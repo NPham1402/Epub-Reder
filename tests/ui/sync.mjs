@@ -161,7 +161,7 @@ try {
   await showExt(A, "Sync & Backup");
   await A.click("text=Sync now");
   await A.waitForTimeout(800);
-  check("Sync & Backup page reports up to date", (await A.textContent(".xp-body")).includes("Up to date"));
+  check("Sync & Backup page reports up to date", /up to date/i.test(await A.textContent("#ext-page")));
 } catch (e) {
   failed++;
   console.log("FAIL  exception: " + e);

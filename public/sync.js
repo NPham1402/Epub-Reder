@@ -456,6 +456,9 @@ registerExtension({
         });
         actions.appendChild(del);
         row.appendChild(actions);
+        // The whole row is the jump target (it looks clickable); the buttons
+        // inside handle their own clicks.
+        row.addEventListener("click", (e) => { if (!e.target.closest("button")) openBookmark(b); });
 
         list.appendChild(row);
       }

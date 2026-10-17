@@ -24,6 +24,15 @@ try {
   await page.click("#login-form button[type=submit]");
   await page.waitForSelector("#app:not([hidden])");
 
+  // Every asset URL carries the build id, so no CDN/browser/SW cache can serve
+  // an old build after a deploy.
+  const html = await (await page.request.get(`${srv.base}/`)).text();
+  const ver = (html.match(/\/app\.js\?v=([\w-]+)/) || [])[1];
+  check("index.html stamps a build id into asset URLs", !!ver && !html.includes("__BUILD__"), ver);
+  check("every script and stylesheet carries it", !/(src|href)="\/[\w.-]+\.(js|css)"/.test(html));
+  const swUrl = await page.evaluate(async () => (await navigator.serviceWorker.getRegistration())?.active?.scriptURL || "");
+  check("the service worker is registered under the same build id", swUrl.endsWith(`/sw.js?v=${ver}`), swUrl);
+
   // The link tag Chrome/Edge look for to find the manifest at all.
   const href = await page.getAttribute('link[rel="manifest"]', "href");
   check("index.html links a manifest", href === "/manifest.webmanifest", href);

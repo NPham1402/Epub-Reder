@@ -36,8 +36,48 @@ jobs:
       - name: Tests (unit + integration against the built server, incl. restore drill)
         run: npm test
 
+  # Real-browser checks (tests/ui). Every push to main deploys by itself (see
+  # pin-image), so a UI regression must stop the image here, not reach the
+  # cluster. layout.mjs is left out: its pixel boxes depend on the OS fonts.
+  ui:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci --ignore-scripts
+
+      - name: Build the server and the reading pane's editor
+        run: npm run build:monaco && npm run build:server
+
+      - name: Install Playwright and Chromium
+        run: npm i --no-save playwright && npx playwright install --with-deps chromium
+
+      - name: Browser tests
+        run: |
+          failed=""
+          for f in tests/ui/*.mjs; do
+            [ "$(basename "$f")" = layout.mjs ] && continue
+            echo "::group::$f"
+            node --disable-warning=ExperimentalWarning "$f" || failed="$failed $(basename "$f")"
+            echo "::endgroup::"
+          done
+          if [ -n "$failed" ]; then echo "::error::browser tests failed:$failed"; exit 1; fi
+
+      - name: Screenshots of the failing run
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-screenshots
+          path: /tmp/epub-ui-shots
+          if-no-files-found: ignore
+
   build-and-push:
-    needs: test
+    needs: [test, ui]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
@@ -67,6 +107,8 @@ jobs:
           context: .
           push: true
           platforms: linux/arm64
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
           tags: |
             ghcr.io/${{ steps.repo.outputs.name }}:latest
             ghcr.io/${{ steps.repo.outputs.name }}:${{ github.sha }}

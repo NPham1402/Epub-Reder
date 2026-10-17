@@ -1,8 +1,11 @@
 "use strict";
 // Offline reading. Two caches:
-//   SHELL — the app's own files (HTML/JS/CSS/fonts/Monaco): stale-while-
-//     revalidate, so the app opens instantly and still updates itself once a
-//     network request succeeds in the background.
+//   SHELL — the app's own files. The page itself (navigations) is
+//     network-first, so an online load always gets the current build; its
+//     asset URLs carry the build id (?v=..., stamped by the server), so the
+//     JS/CSS they point at are new URLs too and can be served cache-first
+//     (stale-while-revalidate) without ever showing an old build. Offline,
+//     the last cached page and its assets are used.
 //   DATA  — the three GET endpoints that make up "a book" (list, a book's
 //     index, one chapter's text): network-first, falling back to the last
 //     good copy when there is no network. Every other endpoint (settings,
@@ -11,9 +14,9 @@
 //     (sync.js), and caching a write or a stale search result would be
 //     actively misleading rather than helpful.
 //
-// Bump these when a shell asset changes shape in a way a revalidate might not
-// catch cleanly (rare — revalidate normally makes this unnecessary).
-const SHELL_CACHE = "epub-reader-shell-v9";
+// Bumping is no longer needed per deploy (asset URLs are versioned); only if
+// the cache layout itself changes.
+const SHELL_CACHE = "epub-reader-shell-v10";
 const DATA_CACHE = "epub-reader-data-v1";
 const KEEP = new Set([SHELL_CACHE, DATA_CACHE]);
 
@@ -50,6 +53,28 @@ async function networkFirst(req) {
   }
 }
 
+// Keeps one copy per file: storing /app.js?v=NEW drops /app.js?v=OLD.
+async function putShell(cache, req, res) {
+  await cache.put(req, res);
+  const url = new URL(req.url);
+  if (!url.search) return;
+  for (const key of await cache.keys()) {
+    const k = new URL(key.url);
+    if (k.pathname === url.pathname && k.search !== url.search) await cache.delete(key);
+  }
+}
+
+async function networkFirstPage(req) {
+  const cache = await caches.open(SHELL_CACHE);
+  try {
+    const res = await fetch(req);
+    if (res.ok) await cache.put("/", res.clone());
+    return res;
+  } catch {
+    return (await cache.match("/")) || Response.error();
+  }
+}
+
 async function staleWhileRevalidate(req) {
   const url = new URL(req.url);
   if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
@@ -65,7 +90,7 @@ async function staleWhileRevalidate(req) {
   const cache = await caches.open(SHELL_CACHE);
   const cached = await cache.match(req);
   const network = fetch(req).then((res) => {
-    if (res.ok) cache.put(req, res.clone());
+    if (res.ok) putShell(cache, req, res.clone());
     return res;
   }).catch(() => null);
   return cached || (await network) || Response.error();
@@ -80,5 +105,5 @@ self.addEventListener("fetch", (e) => {
     if (cacheableApiGet(url.pathname)) e.respondWith(networkFirst(req));
     return;
   }
-  e.respondWith(staleWhileRevalidate(req));
+  e.respondWith(req.mode === "navigate" ? networkFirstPage(req) : staleWhileRevalidate(req));
 });
