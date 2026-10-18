@@ -332,6 +332,49 @@ describe("WebDAV for vBook + positions back to vBook", () => {
     }
   });
 
+  test("vBook sync backup: the vbook_backup folder is writable, nothing else is", async () => {
+    const B = "/dav/vbook_backup";
+    const h = basic(DAV);
+    // the exact opening sequence vBook sent (from the request log): HEAD, MKCOL, PROPFIND
+    assert.equal((await dav(B, { method: "HEAD", headers: h })).status, 200);
+    assert.equal((await dav(B + "/", { method: "MKCOL", headers: h })).status, 201);
+    assert.equal((await dav(B + "/", { method: "MKCOL", headers: h })).status, 201, "idempotent");
+    const empty = await dav(B + "/", { method: "PROPFIND", headers: { depth: "1", ...h } });
+    assert.equal(empty.status, 207);
+    const body = Buffer.from("not really zstd but opaque bytes ".repeat(50));
+    const put = (name: string, extra: Record<string, string> = {}, data: Buffer | string = body) =>
+      dav(`${B}/${name}`, { method: "PUT", headers: { ...h, ...extra }, body: data });
+    assert.equal((await put("backup.tar.zst")).status, 201);
+    assert.equal((await put("backup.tar.zst")).status, 204, "overwrite");
+    assert.equal((await put("backup.tar.zst", { "if-none-match": "*" })).status, 412);
+    const xml = await (await dav(B + "/", { method: "PROPFIND", headers: { depth: "1", ...h } })).text();
+    assert.match(xml, /<d:href>\/dav\/vbook_backup\/backup\.tar\.zst<\/d:href>/);
+    assert.equal((xml.match(/backup\.tar\.zst<\/d:href>/g) ?? []).length, 1, "overwrite leaves one file");
+    assert.match(xml, new RegExp(`<d:getcontentlength>${body.length}</d:getcontentlength>`));
+    const got = await dav(`${B}/backup.tar.zst`, { headers: h });
+    assert.equal(got.status, 200);
+    assert.deepEqual(Buffer.from(await got.arrayBuffer()), body);
+    assert.equal((await dav(`${B}/backup.tar.zst`, { method: "HEAD", headers: h })).status, 200);
+    // only backup-shaped names, one folder deep, never without the password
+    assert.equal((await put("evil.html")).status, 404);
+    assert.equal((await put("..%2Fx.tar.zst")).status, 404);
+    assert.equal((await dav(`${B}/sub/a.tar.zst`, { method: "PUT", headers: h, body: "x" })).status, 404);
+    assert.equal((await put("empty.tar.zst", {}, "")).status, 400);
+    assert.equal((await dav(`${B}/anon.tar.zst`, { method: "PUT", body: "x" })).status, 401);
+    assert.equal((await dav(`${B}/backup.tar.zst`, { method: "MOVE", headers: h })).status, 405);
+    // the books root is still read-only
+    assert.equal((await dav("/dav/new.tar.zst", { method: "PUT", headers: h, body: "x" })).status, 405);
+    // only the newest few are kept
+    for (let i = 0; i < 12; i++) assert.equal((await put(`vbook_20260101_0000${String(i).padStart(2, "0")}.tar.zst`)).status, 201);
+    const listed = await (await dav(B + "/", { method: "PROPFIND", headers: { depth: "1", ...h } })).text();
+    assert.ok((listed.match(/<d:href>\/dav\/vbook_backup\/[^<]+<\/d:href>/g) ?? []).length <= 8 + 1, "pruned");
+    assert.match(listed, /vbook_20260101_000011\.tar\.zst/);
+    assert.doesNotMatch(listed, /vbook_20260101_000000\.tar\.zst/);
+    // delete
+    assert.equal((await dav(`${B}/vbook_20260101_000011.tar.zst`, { method: "DELETE", headers: h })).status, 204);
+    assert.equal((await dav(`${B}/vbook_20260101_000011.tar.zst`, { method: "DELETE", headers: h })).status, 404);
+  });
+
   test("positions backup carries this app's position in vBook's own book record", async () => {
     await api(srv.base, cookie, `/api/books/${bookId}/progress`, {
       method: "POST", headers: { "content-type": "application/json" },

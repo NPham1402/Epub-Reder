@@ -233,7 +233,8 @@ out really signs out even offline.
 - **Read these books in vBook:** *Sync & Backup* → vBook card → set a WebDAV
   password, then add a WebDAV source `https://<host>/dav/` in vBook (any user
   name, that password). Or set `DAV_PASSWORD` on the server (it takes precedence).
-  Read-only; every book is offered as an `.epub`.
+  Books are read-only, each offered as an `.epub`. The one writable folder is
+  `/dav/vbook_backup/`, where vBook's *Sync & backup → WebDAV* keeps its backups.
 - **Positions back to vBook:** *Sync & Backup* → *Download positions for vBook*
   (also listed in the WebDAV folder), restored in vBook's Merge mode. Not yet
   tried on a real phone — back up vBook first.

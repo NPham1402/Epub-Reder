@@ -1519,7 +1519,7 @@ app.get("/api/vbook/progress-backup", async (c) => {
 // built from the stored chapters (the original upload is not kept in a form
 // vBook reads) and cached, plus a vbook_*.tar.zst of reading positions vBook
 // can restore. Own password (DAV_PASSWORD), separate from the reader passcode,
-// throttled like login; nothing can be written. Without DAV_PASSWORD there is
+// throttled like login; books are read-only (the one writable folder is vbook_backup, below). Without DAV_PASSWORD there is
 // no endpoint at all.
 const davPerClient = new FailureLimiter({ max: 10, windowMs: LOGIN_WINDOW_MS });
 const davGlobal = new FailureLimiter({ max: 100, windowMs: LOGIN_WINDOW_MS });
@@ -1696,7 +1696,8 @@ async function davHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
   const method = c.req.method.toUpperCase();
   // Extra slashes (a base URL plus vBook's "root folder" can double them) are not a different path.
   const rel = decodeURIComponent(new URL(c.req.url).pathname.replace(/^\/dav\/?/, "")).replace(/^\/+|\/+$/g, "");
-  if (method === "OPTIONS") return new Response(null, { headers: { dav: "1", allow: "OPTIONS, PROPFIND, GET, HEAD", ...noStore } });
+  if (method === "OPTIONS") return new Response(null, { headers: { dav: "1", allow: "OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE, MKCOL", ...noStore } });
+  if (rel === BACKUP_DIR || rel.startsWith(`${BACKUP_DIR}/`)) return davBackup(c, method, rel.slice(BACKUP_DIR.length + 1));
   if (!["PROPFIND", "GET", "HEAD"].includes(method)) return new Response("read-only", { status: 405, headers: { allow: "OPTIONS, PROPFIND, GET, HEAD" } });
 
   const files = await davListing(c.env);
@@ -1728,6 +1729,92 @@ async function davHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
   }
   const headers = { "content-type": f.type, "content-length": String(bytes.length), "last-modified": new Date(f.modified).toUTCString(), ...noStore };
   return new Response(method === "HEAD" ? null : (bytes as unknown as BodyInit), { headers });
+}
+
+// The one writable place: /dav/vbook_backup/. vBook's "Sync & backup → WebDAV"
+// checks (HEAD), creates (MKCOL) and lists (PROPFIND) this folder, then PUTs
+// its backups into it and restores from it. Books at the root stay read-only.
+// Only backup-shaped names, one folder deep, size-capped, newest few kept.
+// The folder always "exists", MKCOL is idempotent, so no step fails on state.
+// Objects are stored as vbook-backup/<ms>__<name>; the time is the file's date.
+const BACKUP_DIR = "vbook_backup";
+const BACKUP_MAX_BYTES = 128 * 1024 * 1024;
+const BACKUP_KEEP = 8;
+const backupNameOk = (n: string) => /^\w[\w .()-]{0,99}\.(tar\.zst|zip)$/i.test(n);
+async function davBackupFiles(env: Env): Promise<{ key: string; name: string; size: number | null; modified: number }[]> {
+  const { objects } = await env.BOOKS.list({ prefix: "vbook-backup/" });
+  const out: { key: string; name: string; size: number | null; modified: number }[] = [];
+  for (const o of objects) {
+    const m = /^vbook-backup\/(\d+)__(.+)$/.exec(o.key);
+    if (m) out.push({ key: o.key, name: m[2], size: o.size, modified: Number(m[1]) });
+  }
+  const files = out.sort((a, b) => b.modified - a.modified);
+  if (env.VBOOK_ZSTD) {
+    const ahead = await vbookPositionsAhead(env);
+    if (ahead.length) {
+      const at = Math.max(...ahead.map((x) => x.at));
+      files.push({ key: "", name: vbookBackupName(at), size: null, modified: at });
+    }
+  }
+  return files;
+}
+async function davBackup(c: Context<{ Bindings: Env }>, method: string, sub: string): Promise<Response> {
+  const env = c.env;
+  const noStore = { "cache-control": "private, no-store" };
+  const xml = (inner: string) => new Response(`<?xml version="1.0" encoding="utf-8"?>\n<d:multistatus xmlns:d="DAV:">${inner}</d:multistatus>`,
+    { status: 207, headers: { "content-type": 'application/xml; charset="utf-8"', ...noStore } });
+  const folder = davResponse(`/dav/${BACKUP_DIR}/`, { collection: true, name: BACKUP_DIR, modified: Date.now() });
+  if (sub === "") {
+    if (method === "MKCOL") return new Response(null, { status: 201, headers: noStore });
+    if (method === "HEAD") return new Response(null, { headers: noStore });
+    if (method === "PROPFIND") {
+      const parts = [folder];
+      if ((c.req.header("depth") ?? "1") !== "0") {
+        for (const f of await davBackupFiles(env)) parts.push(davResponse(`/dav/${BACKUP_DIR}/${encodeURIComponent(f.name)}`, { ...f, type: "application/zstd" }));
+      }
+      return xml(parts.join(""));
+    }
+    return new Response("this is a folder", { status: 405, headers: { allow: "OPTIONS, PROPFIND, HEAD, MKCOL", ...noStore } });
+  }
+  if (!backupNameOk(sub)) return new Response("not found", { status: 404, headers: noStore });
+  const files = await davBackupFiles(env);
+  const f = files.find((x) => x.name === sub);
+
+  if (method === "PUT") {
+    if (c.req.header("if-none-match") === "*" && f) return new Response("exists", { status: 412, headers: noStore });
+    const declared = Number(c.req.header("content-length") ?? 0);
+    if (declared > BACKUP_MAX_BYTES) return new Response("too large", { status: 413, headers: noStore });
+    const body = new Uint8Array(await c.req.arrayBuffer());
+    if (!body.length) return new Response("empty", { status: 400, headers: noStore });
+    if (body.length > BACKUP_MAX_BYTES) return new Response("too large", { status: 413, headers: noStore });
+    await env.BOOKS.put(`vbook-backup/${Date.now()}__${sub}`, body, { httpMetadata: { contentType: "application/zstd" } });
+    const stored = files.filter((x) => x.key);
+    const stale = [...(f?.key ? [f.key] : []), ...stored.filter((x) => x.name !== sub).slice(BACKUP_KEEP - 1).map((x) => x.key)];
+    if (stale.length) await env.BOOKS.delete(stale);
+    return new Response(null, { status: f?.key ? 204 : 201, headers: noStore });
+  }
+  if (method === "DELETE") {
+    if (!f?.key) return new Response("not found", { status: 404, headers: noStore });
+    await env.BOOKS.delete(f.key);
+    return new Response(null, { status: 204, headers: noStore });
+  }
+  if (!["PROPFIND", "GET", "HEAD"].includes(method)) {
+    return new Response("not supported", { status: 405, headers: { allow: "OPTIONS, PROPFIND, GET, HEAD, PUT, DELETE", ...noStore } });
+  }
+  if (!f) return new Response("not found", { status: 404, headers: noStore });
+  let bytes: Uint8Array;
+  if (f.key) {
+    const obj = await env.BOOKS.get(f.key);
+    if (!obj) return new Response("not found", { status: 404, headers: noStore });
+    bytes = new Uint8Array(await obj.arrayBuffer());
+  } else {
+    const b = await progressBackup(env);
+    if (!b) return new Response("not found", { status: 404, headers: noStore });
+    bytes = b.bytes;
+  }
+  if (method === "PROPFIND") return xml(davResponse(`/dav/${BACKUP_DIR}/${encodeURIComponent(f.name)}`, { ...f, size: bytes.length, type: "application/zstd" }));
+  return new Response(method === "HEAD" ? null : (bytes as unknown as BodyInit),
+    { headers: { "content-type": "application/zstd", "content-length": String(bytes.length), "last-modified": new Date(f.modified).toUTCString(), ...noStore } });
 }
 
 // --- Static assets fallback --------------------------------------------------
