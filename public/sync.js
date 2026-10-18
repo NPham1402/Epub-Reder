@@ -374,6 +374,31 @@ registerExtension({
         pwRow.appendChild(msg);
         vb.appendChild(pwRow);
       }
+      // What vBook actually sent, and what came back — for when it reports an error.
+      if (s.dav) {
+        const logBox = el("div", "xp-card");
+        logBox.id = "vbook-dav-log";
+        const head = el("div", "xp-action-toolbar");
+        const refresh = el("button", "xp-btn secondary", "Show recent WebDAV requests");
+        refresh.type = "button";
+        refresh.id = "vbook-dav-log-btn";
+        const out = el("pre", "xp-sec-desc");
+        out.id = "vbook-dav-log-out";
+        out.style.whiteSpace = "pre-wrap";
+        out.style.fontFamily = "var(--font-mono)";
+        out.style.fontSize = "11.5px";
+        refresh.addEventListener("click", async () => {
+          const r = await api("/api/vbook/dav-log").then((x) => x.json()).catch(() => null);
+          if (!r) { out.textContent = "Could not read the log."; return; }
+          out.textContent = r.log.length
+            ? r.log.map((e) => `${new Date(e.at).toLocaleTimeString()}  ${e.method.padEnd(8)} ${e.path}  → ${e.status}  ${e.depth != null ? "Depth " + e.depth + "  " : ""}${e.auth ? "password sent" : "no password"}  ${e.agent}`).join("\n")
+            : "Nothing yet: vBook has not reached this server since it last started.";
+        });
+        head.appendChild(refresh);
+        logBox.appendChild(head);
+        logBox.appendChild(out);
+        vb.appendChild(logBox);
+      }
       const row = el("div", "xp-action-toolbar");
       const dl = el("a", "xp-btn secondary", "Download positions for vBook");
       dl.id = "vbook-positions";

@@ -1611,8 +1611,26 @@ function davResponse(href: string, props: { collection?: boolean; name: string; 
   return `<d:response><d:href>${xmlEsc(href)}</d:href><d:propstat><d:prop>${p.join("")}</d:prop><d:status>HTTP/1.1 200 OK</d:status></d:propstat></d:response>`;
 }
 
-app.all("/dav/*", async (c) => davHandler(c));
-app.all("/dav", async (c) => davHandler(c));
+// The last requests the WebDAV endpoint saw (no passwords, no IPs), shown on
+// the vBook card: when the phone app reports an error, this says what it
+// actually sent and what it got back.
+interface DavLogEntry { at: number; method: string; path: string; status: number; depth: string | null; auth: boolean; agent: string }
+const davLog: DavLogEntry[] = [];
+app.all("/dav/*", async (c) => davLogged(c));
+app.all("/dav", async (c) => davLogged(c));
+app.get("/api/vbook/dav-log", (c) => c.json({ log: davLog }));
+async function davLogged(c: Context<{ Bindings: Env }>): Promise<Response> {
+  const res = await davHandler(c);
+  let path = new URL(c.req.url).pathname;
+  try { path = decodeURIComponent(path); } catch { /* keep it raw */ }
+  davLog.unshift({
+    at: Date.now(), method: c.req.method.toUpperCase(), path: path.slice(0, 120), status: res.status,
+    depth: c.req.header("depth") ?? null, auth: /^basic /i.test(c.req.header("authorization") ?? ""),
+    agent: (c.req.header("user-agent") ?? "").slice(0, 80),
+  });
+  if (davLog.length > 40) davLog.length = 40;
+  return res;
+}
 // The WebDAV password: DAV_PASSWORD from the cluster Secret wins; otherwise the
 // one set in the app (Sync & Backup), kept only as a keyed hash.
 async function storedDavDigest(env: Env): Promise<string | null> {
@@ -1665,7 +1683,8 @@ async function davHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
   }
 
   const method = c.req.method.toUpperCase();
-  const rel = decodeURIComponent(new URL(c.req.url).pathname.replace(/^\/dav\/?/, ""));
+  // Extra slashes (a base URL plus vBook's "root folder" can double them) are not a different path.
+  const rel = decodeURIComponent(new URL(c.req.url).pathname.replace(/^\/dav\/?/, "")).replace(/^\/+|\/+$/g, "");
   if (method === "OPTIONS") return new Response(null, { headers: { dav: "1", allow: "OPTIONS, PROPFIND, GET, HEAD", ...noStore } });
   if (!["PROPFIND", "GET", "HEAD"].includes(method)) return new Response("read-only", { status: 405, headers: { allow: "OPTIONS, PROPFIND, GET, HEAD" } });
 

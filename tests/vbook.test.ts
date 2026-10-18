@@ -669,3 +669,28 @@ describe("WebDAV listing carries real sizes without anyone downloading first", (
     } finally { await srv.stop(); cleanup(srv.dataDir); }
   });
 });
+
+describe("WebDAV request log (for diagnosing the phone app)", () => {
+  test("records what a client sent and got back, never the password; needs a session; tolerates //", async () => {
+    const srv = await startServer();
+    try {
+      const cookie = await login(srv.base);
+      await api(srv.base, cookie, "/api/vbook/dav-password", { method: "PUT", body: JSON.stringify({ password: "log-test-password" }), headers: { "content-type": "application/json" } });
+      const good = { authorization: "Basic " + Buffer.from("anyone:log-test-password").toString("base64"), "user-agent": "ktor-client", depth: "1" };
+      await fetch(srv.base + "/dav/", { method: "PROPFIND", headers: { "user-agent": "ktor-client", depth: "1" } });                    // no credentials: 401
+      assert.equal((await fetch(srv.base + "/dav/", { method: "PROPFIND", headers: good })).status, 207);
+      assert.equal((await fetch(srv.base + "/dav//", { method: "PROPFIND", headers: good })).status, 207, "a doubled slash is the same folder");
+      const anon = await fetch(srv.base + "/api/vbook/dav-log");
+      assert.equal(anon.status, 401);
+      const { log } = (await (await api(srv.base, cookie, "/api/vbook/dav-log")).json()) as { log: { method: string; path: string; status: number; auth: boolean; agent: string; depth: string | null }[] };
+      assert.deepEqual(log.map((e) => [e.method, e.path, e.status, e.auth]), [
+        ["PROPFIND", "/dav//", 207, true],
+        ["PROPFIND", "/dav/", 207, true],
+        ["PROPFIND", "/dav/", 401, false],
+      ]);
+      assert.equal(log[0].agent, "ktor-client");
+      assert.equal(log[0].depth, "1");
+      assert.ok(!JSON.stringify(log).includes("log-test-password") && !JSON.stringify(log).includes(good.authorization.slice(6)));
+    } finally { await srv.stop(); cleanup(srv.dataDir); }
+  });
+});
