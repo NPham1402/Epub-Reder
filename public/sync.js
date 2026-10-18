@@ -391,7 +391,7 @@ registerExtension({
           const r = await api("/api/vbook/dav-log").then((x) => x.json()).catch(() => null);
           if (!r) { out.textContent = "Could not read the log."; return; }
           out.textContent = r.log.length
-            ? r.log.map((e) => `${new Date(e.at).toLocaleTimeString()}  ${e.method.padEnd(8)} ${e.path}  → ${e.status}  ${e.depth != null ? "Depth " + e.depth + "  " : ""}${e.auth ? "password sent" : "no password"}  ${e.agent}`).join("\n")
+            ? r.log.map((e) => `${new Date(e.at).toLocaleTimeString()}  ${e.method.padEnd(8)} ${e.path}  → ${e.status}  ${e.depth != null ? "Depth " + e.depth + "  " : ""}${e.auth ? "password sent" : "no password"}  ${e.agent}${e.note ? "  ⚠ " + e.note : ""}${e.ms > 2000 ? "  (" + Math.round(e.ms / 1000) + "s)" : ""}`).join("\n")
             : "Nothing yet: vBook has not reached this server since it last started.";
         });
         head.appendChild(refresh);

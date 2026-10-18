@@ -1614,16 +1614,19 @@ function davResponse(href: string, props: { collection?: boolean; name: string; 
 // The last requests the WebDAV endpoint saw (no passwords, no IPs), shown on
 // the vBook card: when the phone app reports an error, this says what it
 // actually sent and what it got back.
-interface DavLogEntry { at: number; method: string; path: string; status: number; depth: string | null; auth: boolean; agent: string }
+interface DavLogEntry { at: number; method: string; path: string; status: number; depth: string | null; auth: boolean; agent: string; note?: string; ms: number }
 const davLog: DavLogEntry[] = [];
 app.all("/dav/*", async (c) => davLogged(c));
 app.all("/dav", async (c) => davLogged(c));
 app.get("/api/vbook/dav-log", (c) => c.json({ log: davLog }));
 async function davLogged(c: Context<{ Bindings: Env }>): Promise<Response> {
   let res: Response;
+  let note: string | undefined;
+  const t0 = Date.now();
   try { res = await davHandler(c); }
   catch (err) {
-    console.error("dav", errMsg(err));
+    note = errMsg(err).slice(0, 160);
+    console.error("dav", c.req.method, note);
     res = new Response("temporarily unavailable, try again", { status: 503, headers: { "retry-after": "2", "cache-control": "private, no-store" } });
   }
   let path = new URL(c.req.url).pathname;
@@ -1631,7 +1634,7 @@ async function davLogged(c: Context<{ Bindings: Env }>): Promise<Response> {
   davLog.unshift({
     at: Date.now(), method: c.req.method.toUpperCase(), path: path.slice(0, 120), status: res.status,
     depth: c.req.header("depth") ?? null, auth: /^basic /i.test(c.req.header("authorization") ?? ""),
-    agent: (c.req.header("user-agent") ?? "").slice(0, 80),
+    agent: (c.req.header("user-agent") ?? "").slice(0, 80), note, ms: Date.now() - t0,
   });
   if (davLog.length > 40) davLog.length = 40;
   return res;
@@ -1758,6 +1761,30 @@ async function davBackupFiles(env: Env): Promise<{ key: string; name: string; si
   }
   return files;
 }
+// Reads an upload chunk by chunk so that a connection that drops half-way
+// (a 48 MB backup over a slow link, a proxy timeout) is reported with how far it got.
+async function readUpload(req: Request, declared: number): Promise<Uint8Array> {
+  if (!req.body) return new Uint8Array(0);
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let got = 0;
+  const t0 = Date.now();
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      got += value.length;
+      if (got > BACKUP_MAX_BYTES) { await reader.cancel().catch(() => undefined); throw new Error("upload too large"); }
+      chunks.push(value);
+    }
+  } catch (err) {
+    throw new Error(`upload interrupted after ${got} of ${declared || "?"} bytes in ${Math.round((Date.now() - t0) / 1000)}s: ${errMsg(err)}`);
+  }
+  const out = new Uint8Array(got);
+  let at = 0;
+  for (const ch of chunks) { out.set(ch, at); at += ch.length; }
+  return out;
+}
 async function davBackup(c: Context<{ Bindings: Env }>, method: string, sub: string): Promise<Response> {
   const env = c.env;
   const noStore = { "cache-control": "private, no-store" };
@@ -1784,7 +1811,7 @@ async function davBackup(c: Context<{ Bindings: Env }>, method: string, sub: str
     if (c.req.header("if-none-match") === "*" && f) return new Response("exists", { status: 412, headers: noStore });
     const declared = Number(c.req.header("content-length") ?? 0);
     if (declared > BACKUP_MAX_BYTES) return new Response("too large", { status: 413, headers: noStore });
-    const body = new Uint8Array(await c.req.arrayBuffer());
+    const body = await readUpload(c.req.raw, declared);
     if (!body.length) return new Response("empty", { status: 400, headers: noStore });
     if (body.length > BACKUP_MAX_BYTES) return new Response("too large", { status: 413, headers: noStore });
     await env.BOOKS.put(`vbook-backup/${Date.now()}__${sub}`, body, { httpMetadata: { contentType: "application/zstd" } });

@@ -736,4 +736,28 @@ describe("WebDAV request log (for diagnosing the phone app)", () => {
       assert.ok(!JSON.stringify(log).includes("log-test-password") && !JSON.stringify(log).includes(good.authorization.slice(6)));
     } finally { await srv.stop(); cleanup(srv.dataDir); }
   });
+
+  test("an upload that drops half-way is logged with how far it got, and leaves no file", async () => {
+    const srv = await startServer();
+    try {
+      const cookie = await login(srv.base);
+      await api(srv.base, cookie, "/api/vbook/dav-password", { method: "PUT", body: JSON.stringify({ password: "log-test-password" }), headers: { "content-type": "application/json" } });
+      const auth = "Basic " + Buffer.from("anyone:log-test-password").toString("base64");
+      const { connect } = await import("node:net");
+      const sock = connect({ host: "127.0.0.1", port: Number(new URL(srv.base).port) });
+      await new Promise<void>((r) => sock.once("connect", r));
+      sock.write(`PUT /dav/vbook_backup/vbook_x_20261018_155321.tar.zst HTTP/1.1\r\nHost: x\r\nAuthorization: ${auth}\r\nUser-Agent: ktor-client\r\nContent-Length: 100000\r\n\r\n${"z".repeat(2000)}`);
+      await new Promise((r) => setTimeout(r, 200));
+      sock.destroy();
+      let note: string | undefined;
+      for (let i = 0; i < 30 && !note; i++) {
+        await new Promise((r) => setTimeout(r, 100));
+        const { log } = (await (await api(srv.base, cookie, "/api/vbook/dav-log")).json()) as { log: { method: string; note?: string }[] };
+        note = log.find((e) => e.method === "PUT")?.note;
+      }
+      assert.match(note ?? "", /upload interrupted after \d+ of 100000 bytes/);
+      const listing = await fetch(srv.base + "/dav/vbook_backup/", { method: "PROPFIND", headers: { authorization: auth, depth: "1" } });
+      assert.doesNotMatch(await listing.text(), /vbook_x_/);
+    } finally { await srv.stop(); cleanup(srv.dataDir); }
+  });
 });
