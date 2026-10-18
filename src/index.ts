@@ -1620,7 +1620,12 @@ app.all("/dav/*", async (c) => davLogged(c));
 app.all("/dav", async (c) => davLogged(c));
 app.get("/api/vbook/dav-log", (c) => c.json({ log: davLog }));
 async function davLogged(c: Context<{ Bindings: Env }>): Promise<Response> {
-  const res = await davHandler(c);
+  let res: Response;
+  try { res = await davHandler(c); }
+  catch (err) {
+    console.error("dav", errMsg(err));
+    res = new Response("temporarily unavailable, try again", { status: 503, headers: { "retry-after": "2", "cache-control": "private, no-store" } });
+  }
   let path = new URL(c.req.url).pathname;
   try { path = decodeURIComponent(path); } catch { /* keep it raw */ }
   davLog.unshift({
@@ -1637,7 +1642,13 @@ async function storedDavDigest(env: Env): Promise<string | null> {
   try {
     const r = await env.DB.prepare(`SELECT digest FROM dav_auth WHERE id = 1`).first<{ digest: string }>();
     return r?.digest ?? null;
-  } catch { return null; } // table missing: migration not applied yet
+  } catch (err) {
+    // Only "the table doesn't exist yet" (migration not applied) means "no
+    // password". Any other error (a busy database...) must not look like
+    // "WebDAV is off" or "wrong password": let it surface as a retryable 503.
+    if (/no such table/i.test(errMsg(err))) return null;
+    throw err;
+  }
 }
 async function davPasswordOk(env: Env, password: string): Promise<boolean> {
   if (env.DAV_PASSWORD) return passcodeMatches(password, env.DAV_PASSWORD, env.SESSION_SECRET);
