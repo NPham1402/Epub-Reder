@@ -53,3 +53,13 @@ export async function passcodeMatches(input: string, expected: string, secret: s
   const [a, b] = await Promise.all([hmac(secret, "pw:" + input), hmac(secret, "pw:" + expected)]);
   return constantTimeEqual(a, b);
 }
+
+// A secret stored server-side (e.g. the vBook WebDAV password set in the UI):
+// only its keyed hash is kept, compared in constant time.
+export async function secretDigest(secret: string, value: string): Promise<string> {
+  return hmac(secret, "stored:" + value);
+}
+export async function secretMatches(input: string, digest: string, secret: string): Promise<boolean> {
+  if (typeof input !== "string" || typeof digest !== "string" || !digest) return false;
+  return constantTimeEqual(await hmac(secret, "stored:" + input), digest);
+}

@@ -570,3 +570,66 @@ describe("vBook bookmarks", () => {
     assert.equal((await list()).length, before);
   });
 });
+
+describe("WebDAV password set from the app", () => {
+  let srv: TestServer;
+  let cookie: string;
+  const put = (pw: string, ck = cookie) => api(srv.base, ck, "/api/vbook/dav-password", { method: "PUT", body: JSON.stringify({ password: pw }), headers: { "content-type": "application/json" } });
+  const dav = (pw: string) => fetch(srv.base + "/dav/", { method: "PROPFIND", headers: { depth: "0", authorization: "Basic " + Buffer.from(`u:${pw}`).toString("base64") } });
+
+  before(async () => { srv = await startServer(); cookie = await login(srv.base); });
+  after(async () => { await srv.stop(); cleanup(srv.dataDir); });
+
+  test("off by default; setting it needs a signed-in session", async () => {
+    assert.equal((await fetch(srv.base + "/dav/", { method: "PROPFIND" })).status, 404);
+    const anon = await fetch(srv.base + "/api/vbook/dav-password", { method: "PUT", body: JSON.stringify({ password: "long-enough-pw" }), headers: { "content-type": "application/json" } });
+    assert.equal(anon.status, 401);
+    const st = (await (await api(srv.base, cookie, "/api/vbook/status")).json()) as { dav: string | null };
+    assert.equal(st.dav, null);
+  });
+
+  test("short passwords and the reader passcode are refused", async () => {
+    assert.equal((await put("short")).status, 400);
+    assert.equal((await put("x".repeat(201))).status, 400);
+    const same = await put("correct horse battery staple");
+    assert.equal(same.status, 400);
+    assert.match(((await same.json()) as { error: string }).error, /different/);
+  });
+
+  test("a set password turns WebDAV on; only that password works; change and remove", async () => {
+    assert.equal((await put("first-password-1")).status, 200);
+    assert.equal(((await (await api(srv.base, cookie, "/api/vbook/status")).json()) as { dav: string }).dav, "app");
+    assert.equal((await dav("first-password-1")).status, 207);
+    assert.equal((await dav("wrong-password")).status, 401);
+    assert.equal((await put("second-password-2")).status, 200);
+    assert.equal((await dav("first-password-1")).status, 401, "the old one stops working");
+    assert.equal((await dav("second-password-2")).status, 207);
+    await api(srv.base, cookie, "/api/vbook/dav-password", { method: "DELETE" });
+    assert.equal((await dav("second-password-2")).status, 404);
+  });
+
+  test("the password itself is not stored: only a keyed hash is in the database", async () => {
+    await put("plaintext-check-9");
+    const { readdirSync, readFileSync, statSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const hits: string[] = [];
+    const walk = (d: string) => { for (const e of readdirSync(d)) { const p = join(d, e); if (statSync(p).isDirectory()) walk(p); else if (readFileSync(p).includes("plaintext-check-9")) hits.push(p); } };
+    walk(srv.dataDir);
+    assert.deepEqual(hits, []);
+  });
+});
+
+describe("DAV_PASSWORD from the cluster wins over the app's", () => {
+  test("the server's password works, the app can't override it", async () => {
+    const srv = await startServer({ env: { DAV_PASSWORD: "cluster-secret-1" } });
+    try {
+      const cookie = await login(srv.base);
+      const r = await api(srv.base, cookie, "/api/vbook/dav-password", { method: "PUT", body: JSON.stringify({ password: "app-password-22" }), headers: { "content-type": "application/json" } });
+      assert.equal(r.status, 409);
+      const ok = (pw: string) => fetch(srv.base + "/dav/", { method: "PROPFIND", headers: { depth: "0", authorization: "Basic " + Buffer.from(`u:${pw}`).toString("base64") } });
+      assert.equal((await ok("cluster-secret-1")).status, 207);
+      assert.equal((await ok("app-password-22")).status, 401);
+      assert.equal(((await (await api(srv.base, cookie, "/api/vbook/status")).json()) as { dav: string }).dav, "cluster");
+    } finally { await srv.stop(); cleanup(srv.dataDir); }
+  });
+});

@@ -110,6 +110,28 @@ try {
   check("positions download is offered once a vBook module has a position", (await page.getAttribute("#vbook-positions", "href")) === "/api/vbook/progress-backup");
   const dl = await page.request.get(srv.base + "/api/vbook/progress-backup");
   check("and downloads a vbook_*.tar.zst", dl.status() === 200 && /vbook_\d{8}_\d{6}\.tar\.zst/.test(dl.headers()["content-disposition"] || ""), dl.headers()["content-disposition"]);
+
+  // Turn WebDAV on from the page, then really talk to it as vBook would.
+  const dav = (pw) => page.request.fetch(srv.base + "/dav/", { method: "PROPFIND", headers: { depth: "1", authorization: "Basic " + Buffer.from(`phone:${pw}`).toString("base64") } });
+  check("before a password is set, /dav/ does not exist", (await page.request.fetch(srv.base + "/dav/", { method: "PROPFIND" })).status() === 404);
+  await page.fill("#vbook-dav-pw", "short");
+  await page.click("#vbook-dav-save");
+  await page.waitForFunction(() => /8 to 200/.test(document.querySelector("#vbook-dav-msg")?.textContent || ""));
+  check("a too-short password is refused with a reason", true);
+  await page.fill("#vbook-dav-pw", "phone-pass-123");
+  await page.click("#vbook-dav-save");
+  await page.waitForSelector("#vbook-dav-off", { timeout: 10000 });
+  check("saving turns it on: the page now shows the address and a Turn off button", /\/dav\//.test(await page.textContent("#vbook-dav")));
+  const ok = await dav("phone-pass-123");
+  check("vBook's password gets a listing (207) with the imported book", ok.status() === 207 && (await ok.text()).includes(".epub"), String(ok.status()));
+  check("a wrong password is refused (401)", (await dav("nope-nope")).status() === 401);
+  check("the reader passcode does not work as the WebDAV password", (await dav(PASSCODE)).status() === 401);
+  const typed = await page.inputValue("#vbook-dav-pw");
+  const html = await page.content();
+  check("the password is never echoed back into the page", typed === "" && !html.includes("phone-pass-123"));
+  await page.click("#vbook-dav-off");
+  await page.waitForFunction(() => document.querySelector("#vbook-dav-save")?.textContent === "Turn on", null, { timeout: 10000 });
+  check("Turn off removes it: /dav/ is gone again", (await dav("phone-pass-123")).status() === 404);
 } catch (e) {
   failed++;
   console.log("FAIL  exception: " + e);

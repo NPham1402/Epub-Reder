@@ -9,7 +9,7 @@ import { readBlocks } from "./chapters";
 import { buildMatch, findHits, foldVi } from "./search";
 import { decodeText, htmlToText, splitChapters } from "./textsplit";
 import { fakeCodeName, fakeFileName } from "./names";
-import { passcodeMatches, signSession, verifySession } from "./auth";
+import { passcodeMatches, secretDigest, secretMatches, signSession, verifySession } from "./auth";
 import { FailureLimiter } from "./ratelimit";
 import {
   abortIngest, busyBooks, contentBinKey, legacyContentKey, spineMetaKey, stagedKey, stagedPrefix, uploadPartKey, uploadPrefix,
@@ -1499,7 +1499,8 @@ async function progressBackup(env: Env): Promise<{ name: string; bytes: Uint8Arr
 app.get("/api/vbook/status", async (c) => {
   const r = await c.env.DB.prepare(`SELECT COUNT(*) AS n FROM books WHERE vbook_id IS NOT NULL`).first<{ n: number }>();
   const ahead = await vbookPositionsAhead(c.env);
-  return c.json({ import: !!c.env.VBOOK_UNZSTD, dav: !!c.env.DAV_PASSWORD, books: r?.n ?? 0, positions: ahead.length });
+  const dav = c.env.DAV_PASSWORD ? "cluster" : (await storedDavDigest(c.env)) ? "app" : null;
+  return c.json({ import: !!c.env.VBOOK_UNZSTD, dav, books: r?.n ?? 0, positions: ahead.length });
 });
 
 app.get("/api/vbook/progress-backup", async (c) => {
@@ -1582,8 +1583,42 @@ function davResponse(href: string, props: { collection?: boolean; name: string; 
 
 app.all("/dav/*", async (c) => davHandler(c));
 app.all("/dav", async (c) => davHandler(c));
+// The WebDAV password: DAV_PASSWORD from the cluster Secret wins; otherwise the
+// one set in the app (Sync & Backup), kept only as a keyed hash.
+async function storedDavDigest(env: Env): Promise<string | null> {
+  try {
+    const r = await env.DB.prepare(`SELECT digest FROM dav_auth WHERE id = 1`).first<{ digest: string }>();
+    return r?.digest ?? null;
+  } catch { return null; } // table missing: migration not applied yet
+}
+async function davPasswordOk(env: Env, password: string): Promise<boolean> {
+  if (env.DAV_PASSWORD) return passcodeMatches(password, env.DAV_PASSWORD, env.SESSION_SECRET);
+  const digest = await storedDavDigest(env);
+  return !!digest && secretMatches(password, digest, env.SESSION_SECRET);
+}
+
+app.put("/api/vbook/dav-password", async (c) => {
+  if (c.env.DAV_PASSWORD) return c.json({ error: "the WebDAV password is set by the server (DAV_PASSWORD) and can't be changed here" }, 409);
+  const body = (await c.req.json().catch(() => null)) as { password?: unknown } | null;
+  const pw = typeof body?.password === "string" ? body.password : "";
+  if (pw.length < 8 || pw.length > 200) return c.json({ error: "the password must be 8 to 200 characters" }, 400);
+  if (await passcodeMatches(pw, c.env.ACCESS_PASSCODE, c.env.SESSION_SECRET)) {
+    return c.json({ error: "use a different password than the reader passcode (this one is typed into another app)" }, 400);
+  }
+  await c.env.DB.prepare(
+    `INSERT INTO dav_auth (id, digest, updated_at) VALUES (1, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET digest = excluded.digest, updated_at = excluded.updated_at`,
+  ).bind(await secretDigest(c.env.SESSION_SECRET, pw), Date.now()).run();
+  return c.json({ ok: true });
+});
+app.delete("/api/vbook/dav-password", async (c) => {
+  if (c.env.DAV_PASSWORD) return c.json({ error: "the WebDAV password is set by the server (DAV_PASSWORD)" }, 409);
+  await c.env.DB.prepare(`DELETE FROM dav_auth WHERE id = 1`).run();
+  return c.json({ ok: true });
+});
+
 async function davHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
-  if (!c.env.DAV_PASSWORD) return c.json({ error: "not found" }, 404);
+  if (!c.env.DAV_PASSWORD && !(await storedDavDigest(c.env))) return c.json({ error: "not found" }, 404);
   const noStore = { "cache-control": "private, no-store" };
   const client = clientKey(c);
   const wait = Math.max(davPerClient.retryAfter(client), davGlobal.retryAfter("*"));
@@ -1593,7 +1628,7 @@ async function davHandler(c: Context<{ Bindings: Env }>): Promise<Response> {
   if (/^basic /i.test(auth)) {
     try { password = atob(auth.slice(6).trim()).split(":").slice(1).join(":"); } catch { password = ""; }
   }
-  if (!password || !(await passcodeMatches(password, c.env.DAV_PASSWORD, c.env.SESSION_SECRET))) {
+  if (!password || !(await davPasswordOk(c.env, password))) {
     if (password) { davPerClient.fail(client); davGlobal.fail("*"); }
     return new Response("authentication required", { status: 401, headers: { "www-authenticate": 'Basic realm="books", charset="UTF-8"', ...noStore } });
   }

@@ -327,11 +327,53 @@ registerExtension({
       if (s.dav) {
         davLine.appendChild(document.createTextNode("Read these modules in vBook: add a WebDAV source "));
         davLine.appendChild(el("code", null, `${location.origin}/dav/`));
-        davLine.appendChild(document.createTextNode(" — any user name, the WebDAV password (not the passcode)."));
+        davLine.appendChild(document.createTextNode(" — any user name, and the WebDAV password below (not the passcode)."));
       } else {
-        davLine.textContent = "WebDAV for vBook is off (set DAV_PASSWORD on the server to turn it on).";
+        davLine.textContent = "WebDAV for vBook is off. Set a password below to turn it on.";
       }
       vb.appendChild(davLine);
+
+      // Set / change the WebDAV password here, unless the server fixes it (DAV_PASSWORD).
+      if (s.dav === "cluster") {
+        vb.appendChild(el("p", "xp-sec-desc", "The WebDAV password is set by the server (DAV_PASSWORD)."));
+      } else {
+        const pwRow = el("div", "xp-action-toolbar");
+        pwRow.id = "vbook-dav-form";
+        const pw = el("input", "sv-input");
+        pw.id = "vbook-dav-pw";
+        pw.type = "password";
+        pw.autocomplete = "new-password";
+        pw.placeholder = s.dav ? "New WebDAV password (8+ characters)" : "WebDAV password (8+ characters)";
+        pw.style.maxWidth = "260px";
+        const save = el("button", "xp-btn primary", s.dav ? "Change" : "Turn on");
+        save.type = "button";
+        save.id = "vbook-dav-save";
+        const msg = el("span", "xp-sec-desc");
+        msg.id = "vbook-dav-msg";
+        save.addEventListener("click", async () => {
+          save.disabled = true;
+          msg.textContent = "";
+          const res = await api("/api/vbook/dav-password", { method: "PUT", body: JSON.stringify({ password: pw.value }) }).catch(() => null);
+          const data = res ? await res.json().catch(() => ({})) : {};
+          save.disabled = false;
+          if (res && res.ok) { pw.value = ""; refreshExtPage("sync-backup"); return; }
+          msg.textContent = (data && data.error) || "Could not save the password.";
+        });
+        pwRow.appendChild(pw);
+        pwRow.appendChild(save);
+        if (s.dav) {
+          const off = el("button", "xp-btn secondary", "Turn off");
+          off.type = "button";
+          off.id = "vbook-dav-off";
+          off.addEventListener("click", async () => {
+            await api("/api/vbook/dav-password", { method: "DELETE" }).catch(() => {});
+            refreshExtPage("sync-backup");
+          });
+          pwRow.appendChild(off);
+        }
+        pwRow.appendChild(msg);
+        vb.appendChild(pwRow);
+      }
       const row = el("div", "xp-action-toolbar");
       const dl = el("a", "xp-btn secondary", "Download positions for vBook");
       dl.id = "vbook-positions";

@@ -230,8 +230,9 @@ out really signs out even offline.
   already here / skip); imported books keep vBook's full chapter list, so the
   reading position lands on the same chapter. Importing a newer backup updates
   instead of duplicating.
-- **Read these books in vBook:** set `DAV_PASSWORD` on the server and add a
-  WebDAV source `https://<host>/dav/` in vBook (any user name, that password).
+- **Read these books in vBook:** *Sync & Backup* → vBook card → set a WebDAV
+  password, then add a WebDAV source `https://<host>/dav/` in vBook (any user
+  name, that password). Or set `DAV_PASSWORD` on the server (it takes precedence).
   Read-only; every book is offered as an `.epub`.
 - **Positions back to vBook:** *Sync & Backup* → *Download positions for vBook*
   (also listed in the WebDAV folder), restored in vBook's Merge mode. Not yet
