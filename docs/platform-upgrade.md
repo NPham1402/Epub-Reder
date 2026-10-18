@@ -494,6 +494,8 @@ Mặc định ở mục 13.5 được dùng: sách đã có thì **giữ bản �
 
 **Sửa kèm theo:** mở một chương rồi chuyển sang tab extension trong vòng 700 ms làm mất lần lưu tiến độ (state.current bị xoá trước khi hẹn giờ chạy) — giờ chương đã mở được chốt lúc hẹn giờ.
 
+**Đã kiểm chứng bằng client WebDAV độc lập (2026-10-18):** không dùng được chính vBook (chạy file nhị phân không có chữ ký số là việc chưa được phép; mục 13.1 chỉ giải nén), nên dùng thư viện npm `webdav` — phổ biến, không liên quan code của tôi — nối vào server thật đã nhập bản sao lưu thật (7 sách): liệt kê, `stat`, tải cả 7 file đều chạy, file bắt đầu bằng `PK`, sai mật khẩu 401, kích thước khớp từng byte. Phép thử này bắt được một lỗi mà test của tôi bỏ sót: lần liệt kê đầu mọi file có kích thước 0 (EPUB chưa dựng nên không khai `getcontentlength`) — client có thể bỏ qua file 0 byte. Sửa: dựng sẵn các `.epub` ở nền, lần lượt từng cuốn (RAM phẳng), khi sách lập chỉ mục xong, khi đặt mật khẩu WebDAV, hoặc khi một lần liệt kê thấy thiếu. Đo trên file thật: cuốn dài nhất (2.466 chương, 12,8 MB) dựng trong 3,3 giây (ngưỡng proxy 60 giây); sau khi dựng sẵn, tải mỗi cuốn 40–90 ms. Chỉ Node (Workers không chạy được việc nền sau khi trả lời).
+
 **Chưa kiểm chứng (cần điện thoại):** vBook duyệt/tải từ `/dav/` có đúng như chuẩn WebDAV không (§13.7); vBook khôi phục bản sao lưu một phần ở chế độ Gộp có giữ nguyên dữ liệu khác không — **sao lưu vBook trước khi thử**.
 
 Test: `tests/vbook.test.ts` (15: đọc tar theo luồng, tách đoạn, xem trước/nhập/nhập lại/không lùi tiến độ, ghép theo tên, WebDAV xác thực/liệt kê/tải/chỉ đọc/giới hạn thử sai/xoá cache, bản sao lưu tiến độ), `tests/ui/vbook-import.mjs` (13, toàn luồng trên trình duyệt).

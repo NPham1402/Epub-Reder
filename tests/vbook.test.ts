@@ -633,3 +633,39 @@ describe("DAV_PASSWORD from the cluster wins over the app's", () => {
     } finally { await srv.stop(); cleanup(srv.dataDir); }
   });
 });
+
+describe("WebDAV listing carries real sizes without anyone downloading first", () => {
+  test("books are built ahead (indexing done / password set); listed length == downloaded bytes", async () => {
+    const srv = await startServer();
+    try {
+      const cookie = await login(srv.base);
+      const id = await sendBackup(srv.base, cookie, backup([FULL, PARTIAL]));
+      const j = await runJob(srv.base, cookie, id, "import");
+      for (const b of j.ingest) await ingestAll(srv.base, cookie, b.id);
+      // Nothing is built yet: WebDAV is off, so there is no reason to.
+      const pw = "ahead-of-time-pw";
+      const put = await api(srv.base, cookie, "/api/vbook/dav-password", { method: "PUT", body: JSON.stringify({ password: pw }), headers: { "content-type": "application/json" } });
+      assert.equal(put.status, 200);
+      const auth = { authorization: "Basic " + Buffer.from(`u:${pw}`).toString("base64") };
+      const lengths = async () => {
+        const xml = await (await fetch(srv.base + "/dav/", { method: "PROPFIND", headers: { depth: "1", ...auth } })).text();
+        return [...xml.matchAll(/<d:response>([\s\S]*?)<\/d:response>/g)].flatMap(([, r]) => {
+          const name = r.match(/<d:href>\/dav\/([^<]*\.epub)<\/d:href>/)?.[1];
+          return name ? [[decodeURIComponent(name), Number(r.match(/<d:getcontentlength>(\d+)</)?.[1] ?? 0)] as const] : [];
+        });
+      };
+      let list: (readonly [string, number])[] = [];
+      for (let i = 0; i < 100; i++) { // a few seconds at most
+        list = await lengths();
+        if (list.length === 2 && list.every(([, n]) => n > 0)) break;
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      assert.equal(list.length, 2);
+      assert.ok(list.every(([, n]) => n > 0), JSON.stringify(list));
+      for (const [name, n] of list) {
+        const get = await fetch(`${srv.base}/dav/${encodeURIComponent(name)}`, { headers: auth });
+        assert.equal((await get.arrayBuffer()).byteLength, n, name);
+      }
+    } finally { await srv.stop(); cleanup(srv.dataDir); }
+  });
+});

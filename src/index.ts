@@ -981,6 +981,7 @@ async function ingestChunk(c: Context<{ Bindings: Env }>, id: string): Promise<R
     if (isLast) {
       await content.finish();
       await c.env.DB.prepare(`UPDATE books SET ingest_done = 1, ever_completed = 1 WHERE id = ?`).bind(id).run();
+      void davWarm(c.env);
       return c.json({ done: true, processed: spine.length, total: spine.length });
     }
 
@@ -1535,11 +1536,39 @@ async function davEnsureEpub(env: Env, b: DavBook): Promise<number> {
       const input = await exportInput(env, b.id, b, 0, Math.max(0, b.chapter_count - 1));
       const bytes = buildEpub(input ?? { title: b.title, author: b.author, language: b.language, chapters: [] });
       await env.BOOKS.put(davEpubKey(b.id), bytes, { httpMetadata: { contentType: "application/epub+zip" } });
+      // The book was re-indexed or replaced while this was being built: that
+      // reset already dropped the cache, so don't leave the stale build behind.
+      const still = await env.DB.prepare(`SELECT 1 AS ok FROM books WHERE id = ? AND ingest_done = 1 AND chapter_count = ?`).bind(b.id, b.chapter_count).first();
+      if (!still) await env.BOOKS.delete(davEpubKey(b.id));
       return bytes.length;
     })().finally(() => davBuilding.delete(b.id));
     davBuilding.set(b.id, p);
   }
   return p;
+}
+
+// A client that sees a file listed with no length (or 0) may skip it, so the
+// .epub files are built ahead of time, one after another (one build at a time
+// keeps memory flat), whenever it could matter: a book finishes indexing, the
+// WebDAV password is set, or a listing finds some missing. Node-only: a
+// Workers request can't outlive its response.
+let davWarming = false;
+async function davWarm(env: Env): Promise<void> {
+  if (davWarming || !env.VBOOK_ZSTD) return;
+  if (!env.DAV_PASSWORD && !(await storedDavDigest(env))) return;
+  davWarming = true;
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT id, title, author, language, chapter_count, created_at FROM books WHERE ingest_done = 1`,
+    ).all<DavBook>();
+    const { objects } = await env.BOOKS.list({ prefix: "dav/" });
+    const have = new Set(objects.map((o) => o.key));
+    for (const b of results) if (!have.has(davEpubKey(b.id))) await davEnsureEpub(env, b).catch((e) => console.error("dav warm", errMsg(e)));
+  } catch (e) {
+    console.error("dav warm", errMsg(e));
+  } finally {
+    davWarming = false;
+  }
 }
 
 async function davListing(env: Env): Promise<DavFile[]> {
@@ -1548,6 +1577,7 @@ async function davListing(env: Env): Promise<DavFile[]> {
   ).all<DavBook>();
   const { objects } = await env.BOOKS.list({ prefix: "dav/" });
   const sizes = new Map(objects.map((o) => [o.key, o.size]));
+  if (results.some((b) => !sizes.has(davEpubKey(b.id)))) void davWarm(env); // sizes appear on the next listing
   const used = new Set<string>();
   const files: DavFile[] = results.map((b) => {
     const base = b.title.replace(/[\\/:*?"<>|\u0000-\u001F]/g, "_").trim().slice(0, 120) || "book";
@@ -1609,6 +1639,7 @@ app.put("/api/vbook/dav-password", async (c) => {
     `INSERT INTO dav_auth (id, digest, updated_at) VALUES (1, ?, ?)
      ON CONFLICT(id) DO UPDATE SET digest = excluded.digest, updated_at = excluded.updated_at`,
   ).bind(await secretDigest(c.env.SESSION_SECRET, pw), Date.now()).run();
+  void davWarm(c.env);
   return c.json({ ok: true });
 });
 app.delete("/api/vbook/dav-password", async (c) => {
