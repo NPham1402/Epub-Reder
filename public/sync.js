@@ -399,6 +399,37 @@ registerExtension({
         logBox.appendChild(out);
         vb.appendChild(logBox);
       }
+      // What is on the share, downloadable here without the WebDAV password.
+      if (s.dav) {
+        const box = el("div", "xp-card");
+        box.id = "vbook-dav-files";
+        const head = el("div", "xp-action-toolbar");
+        const btn = el("button", "xp-btn secondary", "Files on WebDAV");
+        btn.type = "button";
+        btn.id = "vbook-dav-files-btn";
+        const list = el("div", "xp-sec-desc");
+        list.id = "vbook-dav-files-list";
+        const fmt = (n) => (n == null ? "" : n > 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
+        btn.addEventListener("click", async () => {
+          const r = await api("/api/dav/files").then((x) => x.json()).catch(() => null);
+          list.textContent = "";
+          if (!r) { list.textContent = "Could not read the list."; return; }
+          if (!r.files.length) { list.textContent = "Nothing on the share yet."; return; }
+          for (const f of r.files) {
+            const line = el("div", "");
+            const a = el("a", "", f.label);
+            a.href = "/api/dav/download?path=" + encodeURIComponent(f.path);
+            a.setAttribute("download", "");
+            line.appendChild(a);
+            line.appendChild(document.createTextNode("  " + [fmt(f.size), f.kind === "backup" ? "vBook backup" : "book", new Date(f.modified).toLocaleDateString()].filter(Boolean).join(" · ")));
+            list.appendChild(line);
+          }
+        });
+        head.appendChild(btn);
+        box.appendChild(head);
+        box.appendChild(list);
+        vb.appendChild(box);
+      }
       const row = el("div", "xp-action-toolbar");
       const dl = el("a", "xp-btn secondary", "Download positions for vBook");
       dl.id = "vbook-positions";

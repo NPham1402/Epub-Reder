@@ -1844,6 +1844,56 @@ async function davBackup(c: Context<{ Bindings: Env }>, method: string, sub: str
     { headers: { "content-type": "application/zstd", "content-length": String(bytes.length), "last-modified": new Date(f.modified).toUTCString(), ...noStore } });
 }
 
+// Download what's on the WebDAV share from the web app itself (signed-in
+// session, no WebDAV password): the book .epub files and the backups vBook
+// uploaded to vbook_backup/. Books are listed by their module code name, like
+// the rest of the UI; ?real=1 on the download keeps the real title.
+app.get("/api/dav/files", async (c) => {
+  const { results: names } = await c.env.DB.prepare(`SELECT id, code_name FROM books`).all<{ id: string; code_name: string }>();
+  const code = new Map(names.map((r) => [r.id, r.code_name]));
+  const books = (await davListing(c.env)).filter((f) => f.book).map((f) => ({
+    path: f.name, label: `${code.get(f.book!.id) ?? "book"}.epub`, size: f.size, modified: f.modified, kind: "book" as const,
+  }));
+  const backups = (await davBackupFiles(c.env)).map((f) => ({
+    path: `${BACKUP_DIR}/${f.name}`, label: f.name, size: f.size, modified: f.modified, kind: "backup" as const,
+  }));
+  return c.json({ files: [...books, ...backups] });
+});
+
+app.get("/api/dav/download", async (c) => {
+  const path = c.req.query("path") ?? "";
+  let bytes: Uint8Array | null = null;
+  let name = path.split("/").pop() ?? "file";
+  let type = "application/octet-stream";
+  if (path.startsWith(`${BACKUP_DIR}/`)) {
+    const f = (await davBackupFiles(c.env)).find((x) => x.name === path.slice(BACKUP_DIR.length + 1));
+    if (f) {
+      type = "application/zstd";
+      if (f.key) { const obj = await c.env.BOOKS.get(f.key); if (obj) bytes = new Uint8Array(await obj.arrayBuffer()); }
+      else bytes = (await progressBackup(c.env))?.bytes ?? null;
+    }
+  } else {
+    const f = (await davListing(c.env)).find((x) => x.name === path && x.book);
+    if (f?.book) {
+      type = "application/epub+zip";
+      if (f.size == null) await davEnsureEpub(c.env, f.book);
+      const obj = await c.env.BOOKS.get(davEpubKey(f.book.id));
+      if (obj) bytes = new Uint8Array(await obj.arrayBuffer());
+      if (c.req.query("real") !== "1") {
+        const r = await c.env.DB.prepare(`SELECT code_name FROM books WHERE id = ?`).bind(f.book.id).first<{ code_name: string }>();
+        name = `${r?.code_name ?? "book"}.epub`;
+      }
+    }
+  }
+  if (!bytes) return c.json({ error: "not found" }, 404);
+  return new Response(bytes as unknown as BodyInit, {
+    headers: {
+      "content-type": type, "content-length": String(bytes.length), "cache-control": "private, no-store",
+      "content-disposition": `attachment; filename="${name.replace(/[^A-Za-z0-9._-]/g, "_")}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+    },
+  });
+});
+
 // --- Static assets fallback --------------------------------------------------
 app.all("*", (c) => c.env.ASSETS.fetch(c.req.raw));
 

@@ -375,6 +375,29 @@ describe("WebDAV for vBook + positions back to vBook", () => {
     assert.equal((await dav(`${B}/vbook_20260101_000011.tar.zst`, { method: "DELETE", headers: h })).status, 404);
   });
 
+  test("the web app can list and download what's on the share, without the WebDAV password", async () => {
+    const h = basic(DAV);
+    const body = Buffer.from("backup bytes ".repeat(40));
+    assert.equal((await dav("/dav/vbook_backup/dl_test.tar.zst", { method: "PUT", headers: h, body })).status, 201);
+    assert.equal((await fetch(srv.base + "/api/dav/files")).status, 401, "needs a session");
+    const { files } = (await (await api(srv.base, cookie, "/api/dav/files")).json()) as { files: { path: string; label: string; kind: string }[] };
+    assert.ok(files.some((f) => f.kind === "book" && /\.epub$/.test(f.path)), "a book is listed");
+    assert.ok(!files.some((f) => f.kind === "book" && f.label.includes("Trạch")), "books are labelled by code name");
+    const bk = files.find((f) => f.path === "vbook_backup/dl_test.tar.zst");
+    assert.ok(bk, "the uploaded backup is listed");
+    const got = await api(srv.base, cookie, "/api/dav/download?path=" + encodeURIComponent(bk!.path));
+    assert.equal(got.status, 200);
+    assert.match(got.headers.get("content-disposition") ?? "", /attachment; filename="dl_test\.tar\.zst"/);
+    assert.deepEqual(Buffer.from(await got.arrayBuffer()), body);
+    const book = files.find((f) => f.kind === "book")!;
+    const epub = await api(srv.base, cookie, "/api/dav/download?path=" + encodeURIComponent(book.path));
+    assert.equal(epub.status, 200);
+    assert.equal(Buffer.from(await epub.arrayBuffer()).subarray(0, 2).toString(), "PK");
+    assert.equal((await api(srv.base, cookie, "/api/dav/download?path=" + encodeURIComponent("../etc/passwd"))).status, 404);
+    assert.equal((await api(srv.base, cookie, "/api/dav/download?path=" + encodeURIComponent("vbook_backup/nope.tar.zst"))).status, 404);
+    await dav("/dav/vbook_backup/dl_test.tar.zst", { method: "DELETE", headers: h });
+  });
+
   test("positions backup carries this app's position in vBook's own book record", async () => {
     await api(srv.base, cookie, `/api/books/${bookId}/progress`, {
       method: "POST", headers: { "content-type": "application/json" },
